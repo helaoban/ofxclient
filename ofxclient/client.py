@@ -1,19 +1,7 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
-try:
-    # python 3
-    from http.client import HTTPSConnection
-except ImportError:
-    # python 2
-    from httplib import HTTPSConnection
+from http.client import HTTPSConnection
 import logging
 import time
-try:
-    # python 3
-    from urllib.parse import splittype, splithost
-except ImportError:
-    # python 2
-    from urllib import splittype, splithost
+from urllib.parse import splittype, splithost
 import uuid
 
 DEFAULT_APP_ID = 'QWIN'
