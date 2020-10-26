@@ -1,29 +1,22 @@
-from __future__ import absolute_import
-from __future__ import unicode_literals
-from __future__ import with_statement
-try:
-    # python 3
-    from configparser import ConfigParser
-except ImportError:
-    # python 2
-    from ConfigParser import ConfigParser
-try:
-    import keyring
-    keyring.get_password('is-backend', 'configured?')
-    KEYRING_AVAILABLE = True
-except RuntimeError:
-    # no keyring backend found
-    KEYRING_AVAILABLE = False
-except ImportError:
-    KEYRING_AVAILABLE = False
+from configparser import ConfigParser
 import os
 import os.path
 import sys
+import typing as t
+
+try:
+    import keyring  # type: ignore
+    keyring.get_password('is-backend', 'configured?')
+    KEYRING_AVAILABLE = True
+except (RuntimeError, ImportError):
+    KEYRING_AVAILABLE = False
 
 from ofxclient.account import Account
 
+DEFAULT_CONFIG: t.Optional[str]
+
 try:
-    DEFAULT_CONFIG = os.path.expanduser(os.path.join('~', 'ofxclient.ini'))
+    DEFAULT_CONFIG = os.path.expanduser(os.path.join('~', '.ofxclient'))
 except:
     DEFAULT_CONFIG = None
 
@@ -178,7 +171,7 @@ class SecurableConfigParser(ConfigParser):
         self._unsaved = {}
 
 
-class OfxConfig(object):
+class Config(object):
     """Default config file handler for other tools to use.
 
     This can read and write from the default config which is
@@ -189,12 +182,12 @@ class OfxConfig(object):
 
     Example usage::
 
-      from ofxclient.config import OfxConfig
+      from ofxclient.config import Config
       from ofxclient import Account
 
       a = Account()
 
-      c = OfxConfig(file_name='/tmp/new.ini')
+      c = Config(file_name='/tmp/new.ini')
       c.add_account(a)
       c.save()
 

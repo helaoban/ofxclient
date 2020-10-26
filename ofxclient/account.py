@@ -34,8 +34,8 @@ class Account(object):
 
     Example from a saved config entry::
 
-      from ofxclient.config import OfxConfig
-      account = OfxConfig().account('local_id() string')
+      from ofxclient.config import Config
+      account = Config().account('local_id() string')
 
     Example of deserialization::
 

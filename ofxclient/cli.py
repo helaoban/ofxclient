@@ -10,7 +10,7 @@ import typing as t
 from ofxhome import OFXHome
 
 from ofxclient.account import BankAccount, BrokerageAccount, CreditCardAccount
-from ofxclient.config import OfxConfig
+from ofxclient.config import Config
 from ofxclient.institution import Institution
 from ofxclient.util import combined_download
 from ofxclient.client import DEFAULT_OFX_VERSION
@@ -49,9 +49,9 @@ def run():
     args = parse_args()
 
     if args["config"]:
-        GlobalConfig = OfxConfig(file_name=args["config"])
+        GlobalConfig = Config(file_name=args["config"])
     else:
-        GlobalConfig = OfxConfig()
+        GlobalConfig = Config()
 
     accounts = GlobalConfig.accounts()
     account_ids = [a.local_id() for a in accounts]
@@ -157,34 +157,49 @@ def view_account_menu(account, args):
         institution = account.institution
         client = institution.client()
 
-        print("Overview:")
-        print("  Name:           %s" % account.description)
-        print("  Account Number: %s" % account.number_masked())
-        print("  Institution:    %s" % institution.description)
-        print("  Main Type:      %s" % str(type(account)))
+        print(
+f"""
+Overview:
+  Name:           %s" {account.description}
+  Account Number: %s" {account.number_masked()}
+  Institution:    %s" {institution.description}
+  Main Type:      %s" {type(account)}
+"""
+        )
+
         if hasattr(account, "routing_number"):
             print("  Routing Number: %s" % account.routing_number)
             print("  Sub Type:       %s" % account.account_type)
         if hasattr(account, "broker_id"):
             print("  Broker ID:      %s" % account.broker_id)
 
-        print("Nerdy Info:")
-        print("  Download Up To:        %s days" % args["days"])
-        print("  Username:              %s" % institution.username)
-        print("  Local Account ID:      %s" % account.local_id())
-        print("  Local Institution ID:  %s" % institution.local_id())
-        print("  FI Id:                 %s" % institution.id)
-        print("  FI Org:                %s" % institution.org)
-        print("  FI Url:                %s" % institution.url)
+        print(
+f"""
+Nerdy Info:
+  Download Up To:        %s days" % args["days"]
+  Username:              %s" % institution.username
+  Local Account ID:      %s" % account.local_id(
+  Local Institution ID:  %s" % institution.local_id(
+  FI Id:                 %s" % institution.id
+  FI Org:                %s" % institution.org
+  FI Url:                %s" % institution.url
+"""
+        )
+
         if institution.broker_id:
             print("  FI Broker Id:          %s" % institution.broker_id)
-        print("  Client Id:             %s" % client.id)
-        print("  App Ver:               %s" % client.app_version)
-        print("  App Id:                %s" % client.app_id)
-        print("  OFX Ver:               %s" % client.ofx_version)
-        print("  User-Agent header:     %s" % client.user_agent)
-        print("  Accept header:         %s" % client.accept)
-        print("  Config File:           %s" % GlobalConfig.file_name)
+
+        print(
+f"""
+  Client Id:             %s" % client.id
+  App Ver:               %s" % client.app_version
+  App Id:                %s" % client.app_id
+  OFX Ver:               %s" % client.ofx_version
+  User-Agent header:     %s" % client.user_agent
+  Accept header:         %s" % client.accept
+  Config File:           %s" % GlobalConfig.file_name
+"""
+        )
 
         menu_item("D", "Download")
         choice = prompt().lower()

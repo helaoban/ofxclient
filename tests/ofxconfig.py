@@ -10,11 +10,11 @@ except ImportError:
     from test.test_support import EnvironmentVarGuard
 
 import ofxclient.config
-from ofxclient.config import OfxConfig
+from ofxclient.config import Config
 from ofxclient import Institution, CreditCardAccount
 
 
-class OfxConfigTests(unittest.TestCase):
+class ConfigTests(unittest.TestCase):
 
     def setUp(self):
         keyring.set_keyring(PlaintextKeyring())
@@ -35,13 +35,13 @@ class OfxConfigTests(unittest.TestCase):
 
         self.assertFalse(os.path.exists(file_name))
 
-        c = OfxConfig(file_name=file_name)  # noqa
+        c = Config(file_name=file_name)  # noqa
         self.assertTrue(os.path.exists(file_name))
 
         os.remove(file_name)
 
     def testAddAccount(self):
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
 
         i = Institution(
                 id='1',
@@ -57,7 +57,7 @@ class OfxConfigTests(unittest.TestCase):
         self.assertEqual(c.account(a.local_id()).local_id(), a.local_id())
 
     def testLoadFromFile(self):
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
         i = Institution(
                 id='1',
                 org='org',
@@ -69,7 +69,7 @@ class OfxConfigTests(unittest.TestCase):
         c.add_account(a)
         c.save()
 
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
         got = c.account(a.local_id())
         self.assertEqual(len(c.accounts()), 1)
         self.assertEqual(got.local_id(), a.local_id())
@@ -88,7 +88,7 @@ class OfxConfigTests(unittest.TestCase):
         # always skip these for now
         return
 
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
 
         i = Institution(
                 id='1',
@@ -114,7 +114,7 @@ class OfxConfigTests(unittest.TestCase):
         # always skip these for now
         return
 
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
         i = Institution(
                 id='1',
                 org='org',
@@ -130,7 +130,7 @@ class OfxConfigTests(unittest.TestCase):
         c.parser.set(a.local_id(), 'institution.password', 'pass')
         c.save()
 
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
         self.assertTrue(
             c.parser.is_secure_option(a.local_id(), 'institution.username')
         )
@@ -145,7 +145,7 @@ class OfxConfigTests(unittest.TestCase):
         # always skip these for now
         return
 
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
         i = Institution(
                 id='1',
                 org='org',
@@ -164,7 +164,7 @@ class OfxConfigTests(unittest.TestCase):
         c.parser.set(a1.local_id(), 'institution.password', 'pass')
         c.save()
 
-        c = OfxConfig(file_name=self.temp_file.name)
+        c = Config(file_name=self.temp_file.name)
         self.assertEqual(len(c.accounts()), 2)
         self.assertEqual(len(c.encrypted_accounts()), 1)
         self.assertEqual(len(c.unencrypted_accounts()), 1)
