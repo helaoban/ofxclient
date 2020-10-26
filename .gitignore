@@ -1,6 +1,7 @@
 .buildinfo
 .doctrees
 venv
+.venv
 
 *.py[co]
 

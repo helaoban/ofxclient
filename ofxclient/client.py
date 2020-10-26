@@ -3,12 +3,24 @@ import logging
 import time
 from urllib.parse import splittype, splithost
 import uuid
+import typing as t
+
+
+if t.TYPE_CHECKING:
+    from http.client import HTTPResponse
 
 DEFAULT_APP_ID = 'QWIN'
 DEFAULT_APP_VERSION = '2500'
 DEFAULT_OFX_VERSION = '102'
 DEFAULT_USER_AGENT = 'httpclient'
 DEFAULT_ACCEPT = '*/*, application/x-ofx'
+
+DEFAULT_HEADERS = {
+    "Accept": DEFAULT_ACCEPT,
+    "User-Agent": DEFAULT_USER_AGENT,
+    "Content-Type": "application/x-ofx",
+    "Connection": "Keep-Alive",
+}
 
 LINE_ENDING = "\r\n"
 
@@ -91,7 +103,7 @@ class Client:
         u = username or self.institution.username
         p = password or self.institution.password
 
-        contents = ['OFX', self._signOn(username=u, password=p)]
+        contents = ['OFX', self._sign_on(username=u, password=p)]
         if with_message:
             contents.append(with_message)
         return LINE_ENDING.join([self.header(), _tag(*contents)])
@@ -99,19 +111,19 @@ class Client:
     def bank_account_query(self, number, date, account_type, bank_id):
         """Bank account statement request"""
         return self.authenticated_query(
-            self._bareq(number, date, account_type, bank_id)
+            self._bare_request(number, date, account_type, bank_id)
         )
 
     def credit_card_account_query(self, number, date):
         """CC Statement request"""
-        return self.authenticated_query(self._ccreq(number, date))
+        return self.authenticated_query(self._credit_card_request(number, date))
 
     def brokerage_account_query(self, number, date, broker_id):
         return self.authenticated_query(
-            self._invstreq(broker_id, number, date))
+            self._investment_request(broker_id, number, date))
 
     def account_list_query(self, date='19700101000000'):
-        return self.authenticated_query(self._acctreq(date))
+        return self.authenticated_query(self._account_request(date))
 
     def post(self, query):
         """
@@ -126,7 +138,7 @@ class Client:
             _, response = self._do_post(query, [('Cookie', cookies)])
         return response
 
-    def _do_post(self, query, extra_headers=[]):
+    def _do_post(self, query, extra_headers=[]) -> t.Tuple[HTTPResponse, str]:
         """
         Do a POST to the Institution.
 
@@ -138,44 +150,40 @@ class Client:
         :return: 2-tuple of (HTTPResponse, str response body)
         :rtype: tuple
         """
-        i = self.institution
-        logging.debug('posting data to %s' % i.url)
-        garbage, path = splittype(i.url)
+        logging.debug('posting data to %s' % self.institution.url)
+        garbage, path = splittype(self.institution.url)
         host, selector = splithost(path)
         h = HTTPSConnection(host, timeout=60)
         # Discover requires a particular ordering of headers, so send the
         # request step by step.
         h.putrequest('POST', selector, skip_host=True,
                      skip_accept_encoding=True)
-        headers = [
-            ('Content-Type', 'application/x-ofx'),
-            ('Host', host),
-            ('Content-Length', len(query)),
-            ('Connection', 'Keep-Alive')
-        ]
-        if self.accept:
-            headers.append(('Accept', self.accept))
-        if self.user_agent:
-            headers.append(('User-Agent', self.user_agent))
-        for ehname, ehval in extra_headers:
-            headers.append((ehname, ehval))
+
+        headers = {
+            **DEFAULT_HEADERS,
+            **{
+                "Host": host,
+                "Content-Length": len(query),
+            }
+            **extra_headers,
+        }
         logging.debug('---- request headers ----')
-        for hname, hval in headers:
-            logging.debug('%s: %s', hname, hval)
-            h.putheader(hname, hval)
+        for name, value in headers.items():
+            logging.debug('%s: %s', name, value)
+            h.putheader(name, value)
         logging.debug('---- request body (query) ----')
         logging.debug(query)
         h.endheaders(query.encode())
-        res = h.getresponse()
-        response = res.read().decode('ascii', 'ignore')
+        response = h.getresponse()
+        decoded = response.read().decode('ascii', 'ignore')
         logging.debug('---- response ----')
-        logging.debug(res.__dict__)
-        logging.debug('Headers: %s', res.getheaders())
-        logging.debug(response)
-        res.close()
-        return res, response
+        logging.debug(response.__dict__)
+        logging.debug('Headers: %s', response.getheaders())
+        logging.debug(decoded)
+        response.close()
+        return response, decoded
 
-    def next_cookie(self):
+    def next_cookie(self) -> str:
         self.cookie += 1
         return str(self.cookie)
 
@@ -195,36 +203,40 @@ class Client:
         return LINE_ENDING.join(parts)
 
     """Generate signon message"""
-    def _signOn(self, username=None, password=None):
-        i = self.institution
-        u = username or i.username
-        p = password or i.password
-        fidata = [_field("ORG", i.org)]
-        if i.id:
-            fidata.append(_field("FID", i.id))
+    def _sign_on(self, username=None, password=None):
+        u = username or self.institution.username
+        p = password or self.institution.password
+        fidata = [_field("ORG", self.institution.org)]
+        if self.institution.id:
+            fidata.append(_field("FID", self.institution.id))
 
-        client_uid = ''
         if str(self.ofx_version) == '103':
             client_uid = _field('CLIENTUID', self.id)
+        else:
+            client_uid = ""
 
-        return _tag("SIGNONMSGSRQV1",
-                    _tag("SONRQ",
-                         _field("DTCLIENT", now()),
-                         _field("USERID", u),
-                         _field("USERPASS", p),
-                         _field("LANGUAGE", "ENG"),
-                         _tag("FI", *fidata),
-                         _field("APPID", self.app_id),
-                         _field("APPVER", self.app_version),
-                         client_uid
-                         ))
+        return _tag(
+            "SIGNONMSGSRQV1",
+            _tag(
+                "SONRQ",
+                 _field("DTCLIENT", now()),
+                 _field("USERID", u),
+                 _field("USERPASS", p),
+                 _field("LANGUAGE", "ENG"),
+                 _tag("FI", *fidata),
+                 _field("APPID", self.app_id),
+                 _field("APPVER", self.app_version),
+                 client_uid
+            )
+        )
 
-    def _acctreq(self, dtstart):
+    def _account_request(self, dtstart):
         req = _tag("ACCTINFORQ", _field("DTACCTUP", dtstart))
         return self._message("SIGNUP", "ACCTINFO", req)
 
-# this is from _ccreq below and reading page 176 of the latest OFX doc.
-    def _bareq(self, acctid, dtstart, accttype, bankid):
+    # this is from _credit_card_request below and reading
+    # page 176 of the latest OFX doc.
+    def _bare_request(self, acctid, dtstart, accttype, bankid):
         req = _tag("STMTRQ",
                    _tag("BANKACCTFROM",
                         _field("BANKID", bankid),
@@ -235,7 +247,7 @@ class Client:
                         _field("INCLUDE", "Y")))
         return self._message("BANK", "STMT", req)
 
-    def _ccreq(self, acctid, dtstart):
+    def _credit_card_request(self, acctid, dtstart):
         req = _tag("CCSTMTRQ",
                    _tag("CCACCTFROM", _field("ACCTID", acctid)),
                    _tag("INCTRAN",
@@ -243,22 +255,29 @@ class Client:
                         _field("INCLUDE", "Y")))
         return self._message("CREDITCARD", "CCSTMT", req)
 
-    def _invstreq(self, brokerid, acctid, dtstart):
-        req = _tag("INVSTMTRQ",
-                   _tag("INVACCTFROM",
-                        _field("BROKERID", brokerid),
-                        _field("ACCTID", acctid)),
-                   _tag("INCTRAN",
-                        _field("DTSTART", dtstart),
-                        _field("INCLUDE", "Y")),
-                   _field("INCOO", "Y"),
-                   _tag("INCPOS",
-                        _field("DTASOF", now()),
-                        _field("INCLUDE", "Y")),
-                   _field("INCBAL", "Y"))
+    def _investment_request(
+        self,
+        broker_id: str,
+        account_id: str,
+        start_date: str,
+    ) -> str:
+        req = _tag(
+            "INVSTMTRQ",
+            _tag(
+                "INVACCTFROM",
+                _field("BROKERID", broker_id),
+                _field("ACCTID", account_id)),
+               _tag("INCTRAN",
+                    _field("DTSTART", start_date),
+                    _field("INCLUDE", "Y")),
+               _field("INCOO", "Y"),
+               _tag("INCPOS",
+                    _field("DTASOF", now()),
+                    _field("INCLUDE", "Y")),
+               _field("INCBAL", "Y"))
         return self._message("INVSTMT", "INVSTMT", req)
 
-    def _message(self, msgType, trnType, request):
+    def _message(self, msgType, trnType, request) -> str:
         return _tag(msgType+"MSGSRQV1",
                     _tag(trnType+"TRNRQ",
                          _field("TRNUID", ofx_uid()),
@@ -266,11 +285,11 @@ class Client:
                          request))
 
 
-def _field(tag, value):
+def _field(tag: str, value: str) -> str:
     return "<"+tag+">"+value
 
 
-def _tag(tag, *contents):
+def _tag(tag: str, *contents: str) -> str:
     return LINE_ENDING.join(['<'+tag+'>']+list(contents)+['</'+tag+'>'])
 
 
