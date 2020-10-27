@@ -48,7 +48,7 @@ AGGREGATE_TYPES = [
 
 
 @contextlib.contextmanager
-def has_node(node, name: str):
+def has_node(node: ET.Element, name: str) -> t.Iterator[ET.Element]:
     child_node = node.find(name)
     if not child_node:
         return
@@ -56,8 +56,8 @@ def has_node(node, name: str):
 
 
 @contextlib.contextmanager
-def has_nodes(node, name: str):
-    child_nodes = node.findAll(name)
+def has_nodes(node: ET.Element, name: str) -> t.Iterator[t.Iterable[ET.Element]]:
+    child_nodes = node.findall(name)
     if not child_nodes:
         return
     yield child_nodes
@@ -135,19 +135,16 @@ def decode_headers(headers: OrderedDict) -> OrderedDict:
     Decode the headers and wrap self.fh in a decoder such that it
     subsequently returns only text.
     """
-    # decode the headers using ascii
-    ascii_headers = OrderedDict(
-        (
-            key.decode("ascii", "replace"),
-            value.decode("ascii", "replace"),
-        )
-        for key, value in headers.items()
-    )
+    ascii_headers = OrderedDict()
+
+    for key, value in headers.items():
+        k = key.decode("ascii", "replace")
+        v = value.decode("ascii", "replace")
+        ascii_headers[k] = v
 
     enc_type = ascii_headers.get("ENCODING")
 
     if not enc_type:
-        # no encoding specified, use the ascii-decoded headers
         return ascii_headers
 
     if enc_type == "USASCII":
@@ -157,14 +154,14 @@ def decode_headers(headers: OrderedDict) -> OrderedDict:
         else:
             encoding = "cp%s" % (cp, )
 
-    elif enc_type in ("UNICODE", "UTF-8"):
+    if enc_type in ("UNICODE", "UTF-8"):
         encoding = "utf-8"
 
-    # Decode the headers using the encoding
-    return OrderedDict(
-        (key.decode(encoding), value.decode(encoding))
-        for key, value in headers.items()
-    )
+    rv = OrderedDict()
+    for key, value in headers.items():
+        rv[key.decode(encoding)] = value.decode(encoding)
+
+    return rv
 
 
 def extract_headers(ofx_str: str) -> OrderedDict:
@@ -224,21 +221,22 @@ def serialize_signon(signon: tp.Signon) -> str:
 <SIGNONMSGSRSV1>
     <SONRS>
         <STATUS>
-            <CODE>{signon.code}</CODE>
-            <SEVERITY>{signon.severity}</SEVERITY>
-            <MESSAGE>{signon.message}</MESSAGE>
+            <CODE>{signon['code']}</CODE>
+            <SEVERITY>{signon['severity']}</SEVERITY>
+            <MESSAGE>{signon['message']}</MESSAGE>
         </STATUS>
-        <DTSERVER>{signon.dtserver}</DTSERVER>
-        <LANGUAGE>{signon.language}</LANGUAGE>
-        <DTPROFUP>{signon.dtprofup}</DTPROFUP>
+        <DTSERVER>{signon['dtserver']}</DTSERVER>
+        <LANGUAGE>{signon['language']}</LANGUAGE>
+        <DTPROFUP>{signon['dtprofup']}</DTPROFUP>
         <FI>
-            <ORG>{signon.fi_org}</ORG>
-            <FID>{signon.fi_fid}</FID>
+            <ORG>{signon['fi_org']}</ORG>
+            <FID>{signon['fi_fid']}</FID>
         </FI>
     </SONRS>
-    <INTU.BID>{signon.intu_bid}</INTU.BID>
+    <INTU.BID>{signon['intu_bid']}</INTU.BID>
 </SIGNONMSGSRSV1>
 """
+
 
 def parse_ofx(
     file_path: str,
@@ -276,8 +274,6 @@ def parse_ofx(
         signon = parse_signon_response(sonrs)
 
     with has_node(node, "stmttrnrs") as transactions:
-        trnuid = extract_contents(transactions, "trnuid")
-
         with has_node(node, "status") as status_node:
             status = {}
             apply = apply_contents(status)
@@ -286,10 +282,6 @@ def parse_ofx(
             apply(status_node, "message")
 
     with has_node(node, "ccstmtrs") as cc_transactions:
-        cc_transactions_trnuid = cc_transactions.find("trnuid")
-        if cc_transactions_trnuid:
-            trnuid = cc_transactions_trnuid.contents[0].strip()
-
         cc_transactions_status = cc_transactions.find("status")
         if cc_transactions_status:
             status = {}
@@ -654,39 +646,24 @@ def parse_balance(
     bal_attr,
     bal_date_attr,
     bal_type_string,
-    fail_fast: bool = True,
-):
+) -> None:
     bal_tag = node.find(bal_tag_name)
-    if hasattr(bal_tag, "contents"):
-        balamt_tag = bal_tag.find("balamt")
-        dtasof_tag = bal_tag.find("dtasof")
-        if hasattr(balamt_tag, "contents"):
-            try:
-                statement["balance"] = to_decimal(balamt_tag)
-            except (IndexError, decimal.InvalidOperation):
-                statement["warnings"].append(
-                    "%s balance amount was empty for %s"
-                    "" % (bal_type_string, node))
-                if fail_fast:
-                    raise ValueError(
-                        "Empty %s balance " % bal_type_string)
-        if hasattr(dtasof_tag, "contents"):
-            try:
-                setattr(statement, bal_date_attr, parse_ofx_date(
-                    dtasof_tag.contents[0].strip()))
-            except IndexError:
-                statement["warnings"].append(
-                    "%s balance date was empty for %s"
-                    "" % (bal_type_string, node)
-                )
-                if fail_fast:
-                    raise
-            except ValueError:
-                statement["warnings"].append(
-                    "%s balance date was not allowed for %s"
-                    "" % (bal_type_string, node))
-                if fail_fast:
-                    raise
+    if not bal_tag or not bal_tag.text:
+        return
+
+    with has_node(bal_tag, "balamt") as balamt_tag:
+        try:
+            statement["balance"] = to_decimal(balamt_tag)
+        except (IndexError, decimal.InvalidOperation) as error:
+            raise ValueError(
+                "Empty %s balance " % bal_type_string
+            ) from error
+
+    with has_node(bal_tag, "dtasof") as dtasof_tag:
+        if not dtasof_tag.text:
+            raise ValueError("Missing balance date")
+        statement["balance_date"] = parse_ofx_date(dtasof_tag.text)
+
 
 def _default_statement() -> tp.Statement:
     return {
@@ -697,10 +674,13 @@ def _default_statement() -> tp.Statement:
         "discarded_entries": [],
         "warnings": [],
         "balance": decimal.Decimal(0),
+        "balance_date": datetime.datetime(0, 0, 0),
+        "available_balance": decimal.Decimal(0),
+        "available_balance_date": datetime.datetime(0, 0, 0),
     }
 
 
-def parse_statement(node, fail_fast: bool = True) -> tp.Statement:
+def parse_statement(node: ET.Element, fail_fast: bool = True) -> tp.Statement:
     """
     Parse a statement in ofx-land and return a Statement object.
     """
@@ -714,7 +694,7 @@ def parse_statement(node, fail_fast: bool = True) -> tp.Statement:
     parse_balance(statement, node, "availbal", "available_balance",
                      "available_balance_date", "ledger")
 
-    for tx_node in node.findAll("stmttrn"):
+    for tx_node in node.findall("stmttrn"):
         try:
             statement["transactions"].append(
                 parse_transaction(tx_node))
@@ -759,7 +739,7 @@ def _amount_to_decimal(val: str) -> decimal.Decimal:
             )
 
 
-def parse_transaction(node, fail_fast: bool = True) -> tp.Transaction:
+def parse_transaction(node) -> tp.Transaction:
     """
     Parse a transaction in ofx-land and return a Transaction object.
     """
@@ -777,14 +757,11 @@ def parse_transaction(node, fail_fast: bool = True) -> tp.Transaction:
 
     if transaction["sic"] is not None and transaction["sic"] in mcc.codes:
         try:
-            transaction["mcc"] = mcc.codes.get(
-                transaction["sic"], "").get("combined description")
+            transaction["mcc"] = mcc.codes[
+                transaction["sic"]]["combined description"]
         except IndexError:
             raise ValueError(
                 "Empty transaction Merchant Category Code (MCC)")
-        except AttributeError:
-            if fail_fast:
-                raise
 
     return transaction
 

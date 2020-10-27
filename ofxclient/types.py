@@ -91,6 +91,9 @@ class Statement(te.TypedDict):
     discarded_entries: t.List[t.Dict[str, t.Any]]
     warnings: t.List[str]
     balance: decimal.Decimal
+    balance_date: datetime.datetime
+    available_balance: decimal.Decimal
+    available_balance_date: datetime.datetime
 
 
 class InvestmentStatement(te.TypedDict):
