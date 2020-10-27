@@ -11,7 +11,7 @@ import typing as t
 
 from bs4 import BeautifulSoup
 
-from . import mcc
+from . import mcc, types as tp
 
 TX_TYPES = [
     "posmf",
@@ -45,9 +45,57 @@ AGGREGATE_TYPES = [
 ]
 
 
+def noop(val: str) -> str:
+    return val
+
+
+if t.TYPE_CHECKING:
+    Transformer = t.Callable[[str], t.Any]
+
+
+def extract_contents(node, name: str) -> t.Optional[str]:
+    tag = node.find(name)
+    if not hasattr(tag, "contents"):
+        return
+    return tag.contents[0].strip()
+
+
+def apply_contents(d: t.Any) -> t.Callable[..., None]:
+    def _do_apply(
+        node,
+        name: str,
+        *transform: t.Callable[[str], t.Any],
+        alias: t.Optional[str] = None,
+    ) -> None:
+        nonlocal d
+        alias = alias or name
+        tag = node.find(name)
+        if not hasattr(tag, "contents"):
+            return
+
+        try:
+            contents = tag.contents[0].strip()
+        except Exception as error:
+            raise ValueError(
+                "Error while trying to extract contents "
+                f"from tag {name}"
+            ) from error
+
+        try:
+            for t in transform:
+                contents = t(contents)
+        except Exception as error:
+            raise RuntimeError(
+                "Error while trying to transform contents "
+                f"from tag {name} using transform {t}"
+            ) from error
+
+    return _do_apply
+
+
 def clean_headers(headers: OrderedDict) -> OrderedDict:
-    rv = OrderedDict()
-    for header, value in self.headers.items():
+    rv: "OrderedDict[str, t.Any]" = OrderedDict()
+    for header, value in headers.items():
         if value.upper() == "NONE":
             rv[header] = None
         else:
@@ -94,8 +142,6 @@ def decode_headers(headers: OrderedDict) -> OrderedDict:
 
 def extract_headers(ofx_str: str) -> OrderedDict:
     rv = OrderedDict()
-    head_data = self.fh.read(1024 * 10)
-    head_data = head_data[:head_data.find(b"<")]
 
     for index, char in enumerate(ofx_str):
         if char == "<":
@@ -119,13 +165,13 @@ def clean_ofx_xml(ofx_str: str) -> str:
     # find all closing tags as hints
     closing_tags = [
         t.upper() for t in
-        re.findall(r"(?i)</([a-z0-9_\.]+)>", ofx_string)
+        re.findall(r"(?i)</([a-z0-9_\.]+)>", ofx_str)
     ]
 
     # close all tags that don't have closing tags and
     # leave all other data intact
     last_open_tag = None
-    tokens = re.split(r"(?i)(</?[a-z0-9_\.]+>)", ofx_string)
+    tokens = re.split(r"(?i)(</?[a-z0-9_\.]+>)", ofx_str)
     cleaned = ""
     for token in tokens:
         is_closing_tag = token.startswith("</")
@@ -141,168 +187,31 @@ def clean_ofx_xml(ofx_str: str) -> str:
         if is_open_tag:
             tag_name = re.findall(r"(?i)<([a-z0-9_\.]+)>", token)[0]
             if tag_name.upper() not in closing_tags:
-                last_open_tag = tag_nam
+                last_open_tag = tag_name
         cleaned = cleaned + token
     return cleaned
 
 
-class AccountType(object):
-    Unknown = 0
-    Bank = 1
-    CreditCard = 2
-    Investment = 3
-
-
-class Account(object):
-    def __init__(self):
-        self.curdef = None
-        self.statement = None
-        self.account_id = ""
-        self.routing_number = ""
-        self.branch_id = ""
-        self.account_type = ""
-        self.institution = None
-        self.type = AccountType.Unknown
-        # Used for error tracking
-        self.warnings = []
-
-
-class InvestmentAccount(Account):
-    def __init__(self):
-        super(InvestmentAccount, self).__init__()
-        self.brokerid = ""
-
-
-class BrokerageBalance:
-    def __init__(self):
-        self.name = None
-        self.description = None
-        self.value = None  # decimal
-
-
-class Security:
-    def __init__(self, uniqueid, name, ticker, memo):
-        self.uniqueid = uniqueid
-        self.name = name
-        self.ticker = ticker
-        self.memo = memo
-
-
-class Signon:
-    def __init__(self, keys):
-        self.code = keys["code"]
-        self.severity = keys["severity"]
-        self.message = keys["message"]
-        self.dtserver = keys["dtserver"]
-        self.language = keys["language"]
-        self.dtprofup = keys["dtprofup"]
-        self.fi_org = keys["org"]
-        self.fi_fid = keys["fid"]
-        self.intu_bid = keys["intu.bid"]
-
-        if int(self.code) == 0:
-            self.success = True
-        else:
-            self.success = False
-
-    def __str__(self):
-        rv = "\t<SIGNONMSGSRSV1>\r\n" + "\t\t<SONRS>\r\n" + \
-              "\t\t\t<STATUS>\r\n"
-        rv += "\t\t\t\t<CODE>%s\r\n" % self.code
-        rv += "\t\t\t\t<SEVERITY>%s\r\n" % self.severity
-        if self.message:
-            rv += "\t\t\t\t<MESSAGE>%s\r\n" % self.message
-        rv += "\t\t\t</STATUS>\r\n"
-        if self.dtserver is not None:
-            rv += "\t\t\t<DTSERVER>" + self.dtserver + "\r\n"
-        if self.language is not None:
-            rv += "\t\t\t<LANGUAGE>" + self.language + "\r\n"
-        if self.dtprofup is not None:
-            rv += "\t\t\t<DTPROFUP>" + self.dtprofup + "\r\n"
-        if (self.fi_org is not None) or (self.fi_fid is not None):
-            rv += "\t\t\t<FI>\r\n"
-            if self.fi_org is not None:
-                rv += "\t\t\t\t<ORG>" + self.fi_org + "\r\n"
-            if self.fi_fid is not None:
-                rv += "\t\t\t\t<FID>" + self.fi_fid + "\r\n"
-            rv += "\t\t\t</FI>\r\n"
-        if self.intu_bid is not None:
-            rv += "\t\t\t<INTU.BID>" + self.intu_bid + "\r\n"
-        rv += "\t\t</SONRS>\r\n"
-        rv += "\t</SIGNONMSGSRSV1>\r\n"
-        return rv
-
-
-class Statement(object):
-    def __init__(self):
-        self.start_date = ""
-        self.end_date = ""
-        self.currency = ""
-        self.transactions = []
-        # Error tracking:
-        self.discarded_entries = []
-        self.warnings = []
-
-
-class InvestmentStatement(object):
-    def __init__(self):
-        self.positions = []
-        self.transactions = []
-        # Error tracking:
-        self.discarded_entries = []
-        self.warnings = []
-
-
-class Transaction(object):
-    def __init__(self):
-        self.payee = ""
-        self.type = ""
-        self.date = None
-        self.user_date = None
-        self.amount = None
-        self.id = ""
-        self.memo = ""
-        self.sic = None
-        self.mcc = ""
-        self.checknum = ""
-
-    def __repr__(self):
-        return "<Transaction units=" + str(self.amount) + ">"
-
-
-class InvestmentTransaction(object):
-    def __init__(self, type):
-        self.type = type.lower()
-        self.tradeDate = None
-        self.settleDate = None
-        self.memo = ""
-        self.security = ""
-        self.income_type = ""
-        self.units = decimal.Decimal(0)
-        self.unit_price = decimal.Decimal(0)
-        self.commission = decimal.Decimal(0)
-        self.fees = decimal.Decimal(0)
-        self.total = decimal.Decimal(0)
-        self.tferaction = None
-
-    def __repr__(self):
-        return "<InvestmentTransaction type=" + str(self.type) + ", \
-            units=" + str(self.units) + ">"
-
-
-class Position(object):
-    def __init__(self):
-        self.security = ""
-        self.units = decimal.Decimal(0)
-        self.unit_price = decimal.Decimal(0)
-        self.market_value = decimal.Decimal(0)
-
-
-class Institution(object):
-    def __init__(self):
-        self.organization = ""
-        self.fid = ""
-
+def serialize_signon(signon: tp.Signon) -> str:
+        return f"""
+<SIGNONMSGSRSV1>
+    <SONRS>
+        <STATUS>
+            <CODE>{signon.code}</CODE>
+            <SEVERITY>{signon.severity}</SEVERITY>
+            <MESSAGE>{signon.message}</MESSAGE>
+        </STATUS>
+        <DTSERVER>{signon.dtserver}</DTSERVER>
+        <LANGUAGE>{signon.language}</LANGUAGE>
+        <DTPROFUP>{signon.dtprofup}</DTPROFUP>
+        <FI>
+            <ORG>{signon.fi_org}</ORG>
+            <FID>{signon.fi_fid}</FID>
+        </FI>
+    </SONRS>
+    <INTU.BID>{signon.intu_bid}</INTU.BID>
+</SIGNONMSGSRSV1>
+"""
 
 def parse_ofx(
     file_path: str,
@@ -320,28 +229,26 @@ def parse_ofx(
     that statements will include bad transactions (which are marked).
 
     """
-    with open(file_path, "r"):
-        ofx_str = file_path.read()
+    with open(file_path, "r") as file:
+        ofx_str = file.read()
 
     headers = clean_headers(
-        decode_headers(extract_headers(ofx_str))
+        decode_headers(extract_headers(ofx_str)))
     cleaned = clean_ofx_xml(ofx_str)
     accounts = []
     signon = None
 
-    tree = BeautifulSoup(cleaned, "html.parser")
-    if tree.find("ofx") is None:
+    node = BeautifulSoup(cleaned, "html.parser")
+    if node.find("ofx") is None:
         raise ValueError("The ofx file is empty!")
 
-    signon_ofx = tree.find("sonrs")
+    signon_ofx = node.find("sonrs")
     if signon_ofx:
         signon = parse_signon_response(signon_ofx)
 
-    transactions = tree.find("stmttrnrs")
+    transactions = node.find("stmttrnrs")
     if transactions:
-        transactions_trnuid = transactions.find("trnuid")
-        if transactions_trnuid:
-            trnuid = transactions_trnuid.contents[0].strip()
+        trnuid = extract_content(transactions, "trnuid")
 
         transactions_status = transactions.find("status")
         if transactions_status:
@@ -355,7 +262,7 @@ def parse_ofx(
             status["message"] = \
                 message.contents[0].strip() if message else None
 
-    cc_transactions = tree.find("ccstmttrnrs")
+    cc_transactions = node.find("ccstmttrnrs")
     if cc_transactions:
         cc_transactions_trnuid = cc_transactions.find("trnuid")
         if cc_transactions_trnuid:
@@ -373,33 +280,36 @@ def parse_ofx(
             status["message"] = \
                 message.contents[0].strip() if message else None
 
-    statements = tree.findAll("stmtrs")
+    statements = node.findAll("stmtrs")
     if statements:
-        accounts += parse_accounts(statements, AccountType.Bank)
+        for account in parse_accounts(statements, tp.AccountType.Bank):
+            accounts.append(account)
 
-    ccstmtrs_ofx = tree.findAll("ccstmtrs")
-    cc_statements = tree.findAll("ccstmtrs")
+    ccstmtrs_ofx = node.findAll("ccstmtrs")
+    cc_statements = node.findAll("ccstmtrs")
     if ccstmtrs_ofx:
-        accounts += parse_accounts(
-            ccstmtrs_ofx, AccountType.CreditCard)
+        for account in parse_accounts(ccstmtrs_ofx, tp.AccountType.CreditCard):
+            accounts.append(account)
 
-    investments = tree.findAll("invstmtrs")
+    investments = node.findAll("invstmtrs")
     if investments:
-        accounts += parse_investment_accounts(investments)
-        security_list = tree.find("seclist")
+        for account in parse_investment_accounts(investments):
+            accounts.append(account)
+
+        security_list = node.find("seclist")
         if security_list:
             security_list = parse_security_list(security_list)
         else:
             security_list = None
 
-    account_info = tree.find("acctinfors")
+    account_info = node.find("acctinfors")
     if account_info:
-        accounts += parse_account_info(account_info, tree)
+        accounts += parse_account_info(account_info, node)
 
-    fi_ofx = tree.find("fi")
+    fi_ofx = node.find("fi")
     if fi_ofx:
         for account in accounts:
-            account.institution = parse_org(fi_ofx)
+            account["institution"] = parse_org(fi_ofx)
 
     if accounts:
         account = accounts[0]
@@ -444,68 +354,65 @@ def parse_ofx_date(
                 date_str[:8], format) - tz_offset + msec
 
 
-def parse_account_info(account_info, tree) -> t.Iterable[Account]:
-    rv = []
-    for account in account_info.findAll("acctinfo"):
-        accounts = []
-        if account.find("bankacctinfo"):
-            accounts += parse_accounts([account], AccountType.Bank)
-        elif account.find("ccacctinfo"):
-            accounts += parse_accounts([account], AccountType.CreditCard)
-        elif account.find("invacctinfo"):
-            accounts += parse_investment_accounts([account])
-        else:
-            continue
+def parse_account_info(account_info, node) -> t.Iterable[tp.OFXAccount]:
+    fi = node.find("fi")
 
-        fi = tree.find("fi")
-        if fi:
-            for account in rv:
-                account.institution = parse_org(fi)
+    if fi:
+        institution = parse_org(fi)
+    else:
+        institution = ""
 
-        desc = account.find("desc")
-        if hasattr(desc, "contents"):
-            for account in accounts:
-                account.desc = desc.contents[0].strip()
-        rv += accounts
-    return rv
+    for node in account_info.findAll("acctinfo"):
+        if node.find("bankacctinfo"):
+            for account in parse_accounts([node], tp.AccountType.Bank):
+                account["institution"] = institution
+                yield account
+
+        if node.find("ccacctinfo"):
+            for account in parse_accounts([node], tp.AccountType.CreditCard):
+                account["institution"] = institution
+                yield account
+
+        if node.find("invacctinfo"):
+            for account in parse_investment_accounts([node]):
+                account["institution"] = institution
+                yield account
+
+        # TODO: description field for accounts.
+
+
+def _default_investment_account() -> tp.InvestmentAccount:
+    return {
+        "currency": "USD",
+        "statement": None,
+        "account_id": "",
+        "routing_number": "",
+        "branch_id": "",
+        "account_type": "",
+        "institution": "",
+        "type": tp.AccountType.Unknown,
+        "warnings": [],
+        "description": "",
+        "broker_id": "",
+    }
 
 
 def parse_investment_accounts(
-    investments, fail_fast: bool = True
-) -> t.Iterable[InvestmentAccount]:
-    rv = []
-    for investment in investments:
-        account = InvestmentAccount()
-        account_id = investment.find("acctid")
-        if hasattr(account_id, "contents"):
-            try:
-                account.account_id = account_id.contents[0].strip()
-            except IndexError:
-                account.warnings.append(
-                    "Empty acctid tag for %s" % investment)
-                if fail_fast:
-                    raise
-
-        broker_id = investment.find("brokerid")
-        if hasattr(broker_id, "contents"):
-            try:
-                account.brokerid = broker_id.contents[0].strip()
-            except IndexError:
-                account.warnings.append(
-                    "Empty brokerid tag for %s" % investment)
-                if fail_fast:
-                    raise
-
-        account.type = AccountType.Investment
-
-        if investment:
-            account.statement = parse_investment_statement(investment)
-        rv.append(account)
-    return rv
+    node,
+    fail_fast: bool = True,
+) -> t.Iterable[tp.InvestmentAccount]:
+    for child_node in node:
+        account = _default_investment_account()
+        apply = apply_contents(account)
+        apply(child_node, "acctid", alias="account_id")
+        apply(child_node, "brokerid", alias="broker_id")
+        account["type"] = tp.AccountType.Investment
+        account["statement"] = parse_investment_statement(child_node)
+        yield account
 
 
-def parse_security_list(node) -> t.Iterable[Security]:
-    rv = []
+def parse_security_list(node) -> t.Iterable[tp.Security]:
+    rv: t.List[tp.Security] = []
     for security_info in node.findAll("secinfo"):
         unique_id = security_info.find("uniqueid")
         name = security_info.find("secname")
@@ -522,297 +429,224 @@ def parse_security_list(node) -> t.Iterable[Security]:
             except AttributeError:
                 # memo can be empty
                 memo = None
-            rv.append(
-                Security(
-                    unique_id.contents[0].strip(),
-                     name.contents[0].strip(),
-                     ticker,
-                     memo
-                )
-            )
+            rv.append({
+                "unique_id": unique_id.contents[0].strip(),
+                "name": name.contents[0].strip(),
+                "ticker": ticker,
+                "memo": memo,
+            })
     return rv
 
 
-def parse_investment_position(tree):
-    position = Position()
-    tag = tree.find("uniqueid")
-    if hasattr(tag, "contents"):
-        position.security = tag.contents[0].strip()
-    tag = tree.find("units")
-    if hasattr(tag, "contents"):
-        position.units = to_decimal(tag)
-    tag = tree.find("unitprice")
-    if hasattr(tag, "contents"):
-        position.unit_price = to_decimal(tag)
-    tag = tree.find("mktval")
-    if hasattr(tag, "contents"):
-        position.market_value = to_decimal(tag)
-    tag = tree.find("dtpriceasof")
-    if hasattr(tag, "contents"):
-        try:
-            position.date = parse_ofx_date(tag.contents[0].strip())
-        except ValueError:
-            raise
+def _default_position() -> tp.Position:
+    return {
+        "security": "N/A",
+        "units": decimal.Decimal(0),
+        "unit_price": decimal.Decimal(0),
+        "market_value": decimal.Decimal(0),
+        "date": datetime.datetime(0, 0, 0)
+    }
+
+
+def parse_investment_position(node) -> tp.Position:
+    position = _default_position()
+    apply = apply_contents(position)
+    apply(node, "uniqueid", alias="security")
+    apply(node, "units", to_decimal)
+    apply(node, "unit_price", to_decimal, alias="unit_price")
+    apply(node, "mktval", to_decimal, alias="market_value")
+    apply(node, "dtpriceasof", parse_ofx_date, alias="market_value")
     return position
 
 
-def parse_investment_transaction(tree):
-    transaction = InvestmentTransaction(tree.name)
-    tag = tree.find("fitid")
-    if hasattr(tag, "contents"):
-        transaction.id = tag.contents[0].strip()
-    tag = tree.find("memo")
-    if hasattr(tag, "contents"):
-        transaction.memo = tag.contents[0].strip()
-    tag = tree.find("dttrade")
-    if hasattr(tag, "contents"):
-        try:
-            transaction.tradeDate = parse_ofx_date(
-                tag.contents[0].strip())
-        except ValueError:
-            raise
-    tag = tree.find("dtsettle")
-    if hasattr(tag, "contents"):
-        try:
-            transaction.settleDate = parse_ofx_date(
-                tag.contents[0].strip())
-        except ValueError:
-            raise
-    tag = tree.find("uniqueid")
-    if hasattr(tag, "contents"):
-        transaction.security = tag.contents[0].strip()
-    tag = tree.find("incometype")
-    if hasattr(tag, "contents"):
-        transaction.income_type = tag.contents[0].strip()
-    tag = tree.find("units")
-    if hasattr(tag, "contents"):
-        transaction.units = to_decimal(tag)
-    tag = tree.find("unitprice")
-    if hasattr(tag, "contents"):
-        transaction.unit_price = to_decimal(tag)
-    tag = tree.find("commission")
-    if hasattr(tag, "contents"):
-        transaction.commission = to_decimal(tag)
-    tag = tree.find("fees")
-    if hasattr(tag, "contents"):
-        transaction.fees = to_decimal(tag)
-    tag = tree.find("total")
-    if hasattr(tag, "contents"):
-        transaction.total = to_decimal(tag)
-    tag = tree.find("inv401ksource")
-    if hasattr(tag, "contents"):
-        transaction.inv401ksource = tag.contents[0].strip()
-    tag = tree.find("tferaction")
-    if hasattr(tag, "contents"):
-        transaction.tferaction = tag.contents[0].strip()
+def _default_investment_transaction(name: str) -> tp.InvestmentTransaction:
+    pass
+
+
+def parse_investment_transaction(node) -> tp.InvestmentTransaction:
+    transaction = _default_investment_transaction(node.name)
+    apply = apply_contents(transaction)
+    apply(node, "fitid")
+    apply(node, "memo")
+    apply(node, "dttrade", "trade_date", transform=parse_ofx_date)
+    apply(node, "dtsettle", "settle_date", transform=parse_ofx_date)
+    apply(node, "uniqueid", "security")
+    apply(node, "incometype", "income_type")
+    apply(node, "units", transform=to_decimal)
+    apply(node, "unitprice", "unit_price", transform=to_decimal)
+    apply(node, "commission", transform=to_decimal)
+    apply(node, "fees", transform=to_decimal)
+    apply(node, "total", transform=to_decimal)
+    apply(node, "inv401ksource")
+    apply(node, "tferaction")
     return transaction
 
 
-def parse_investment_statement(node):
-    statement = InvestmentStatement()
-    currency_tag = node.find("curdef")
-    if hasattr(currency_tag, "contents"):
-        statement.currency = currency_tag.contents[0].strip().lower()
+def _default_investment_statement() -> tp.InvestmentStatement:
+    return {
+        "start_date": datetime.datetime(0, 0, 0),
+        "end_date": datetime.datetime(0, 0, 0),
+        "currency": "USD",
+        "transactions": [],
+        "discarded_entries": [],
+        "warnings": [],
+        "balance_list": [],
+        "positions": [],
+        "available_cash": decimal.Decimal(0),
+        "margin_balance": decimal.Decimal(0),
+        "short_balance": decimal.Decimal(0),
+        "buying_power": decimal.Decimal(0),
+    }
+
+
+def _default_brokerage_balance() -> tp.BrokerageBalance:
+    return {
+        "name": "",
+        "description": "",
+        "value": decimal.Decimal(0),
+    }
+
+
+def parse_investment_statement(node, fail_fast: bool = True) -> tp.InvestmentStatement:
+    statement = _default_investment_statement()
+    apply = apply_contents(statement)
+
+    apply(node, "curdef", str.lower, alias="currency")
+
     invtranlist_ofx = node.find("invtranlist")
     if invtranlist_ofx is not None:
-        tag = invtranlist_ofx.find("dtstart")
-        if hasattr(tag, "contents"):
-            try:
-                statement.start_date = parse_ofx_date(
-                    tag.contents[0].strip())
-            except IndexError:
-                statement.warnings.append("Empty start date.")
-                if fail_fast:
-                    raise
-            except ValueError:
-                e = sys.exc_info()[1]
-                statement.warnings.append("Invalid start date: %s" % e)
-                if fail_fast:
-                    raise
-
-        tag = invtranlist_ofx.find("dtend")
-        if hasattr(tag, "contents"):
-            try:
-                statement.end_date = parse_ofx_date(
-                    tag.contents[0].strip())
-            except IndexError:
-                statement.warnings.append("Empty end date.")
-            except ValueError:
-                e = sys.exc_info()[1]
-                statement.warnings.append("Invalid end date: %s" % e)
-                if fail_fast:
-                    raise
+        apply(node, "dtstart", str.lower, alias="start_date")
+        apply(node, "dtend", str.lower, alias="end_date")
 
     for transaction_type in TX_TYPES:
-        try:
-            for investment_ofx in node.findAll(transaction_type):
-                statement.positions.append(
-                    parse_investment_position(investment_ofx))
-        except (ValueError, IndexError, decimal.InvalidOperation,
-                TypeError):
-            e = sys.exc_info()[1]
-            if fail_fast:
-                raise
-            statement.discarded_entries.append({
-                "error": "Error parsing positions: " + str(e),
-                "content": investment_ofx
-            })
+        for investment_ofx in node.findAll(transaction_type):
+            statement["positions"].append(
+                parse_investment_position(investment_ofx))
 
     for transaction_type in AGGREGATE_TYPES:
-        try:
-            for investment_ofx in node.findAll(transaction_type):
-                statement.transactions.append(
-                    parse_investment_transaction(investment_ofx))
-        except (ValueError, IndexError, decimal.InvalidOperation):
-            e = sys.exc_info()[1]
-            if fail_fast:
-                raise
-            statement.discarded_entries.append({
-                "error": transaction_type + ": " + str(e),
-                "content": investment_ofx
-            })
+        for investment_ofx in node.findAll(transaction_type):
+            statement["transactions"].append(
+                parse_investment_transaction(investment_ofx))
 
     for transaction_node in node.findAll("invbanktran"):
-        for tree in transaction_node.findAll("stmttrn"):
-            try:
-                statement.transactions.append(
-                    parse_transaction(tree))
-            except ValueError:
-                ofxError = sys.exc_info()[1]
-                statement.discarded_entries.append(
-                    {"error": str(ofxError), "content": transaction_node})
-                if fail_fast:
-                    raise
+        for tx_node in transaction_node.findAll("stmttrn"):
+            statement["transactions"].append(parse_transaction(tx_node))
 
     invbal_ofx = node.find("invbal")
     if invbal_ofx is not None:
-        # <AVAILCASH>18073.98<MARGINBALANCE>+00000000000.00<SHORTBALANCE>+00000000000.00<BUYPOWER>+00000000000.00
-        availcash_ofx = invbal_ofx.find("availcash")
-        if availcash_ofx is not None:
-            statement.available_cash = to_decimal(availcash_ofx)
-        margin_balance_ofx = invbal_ofx.find("marginbalance")
-        if margin_balance_ofx is not None:
-            statement.margin_balance = to_decimal(margin_balance_ofx)
-        short_balance_ofx = invbal_ofx.find("shortbalance")
-        if short_balance_ofx is not None:
-            statement.short_balance = to_decimal(short_balance_ofx)
-        buy_power_ofx = invbal_ofx.find("buypower")
-        if buy_power_ofx is not None:
-            statement.buy_power = to_decimal(buy_power_ofx)
+        apply(invbal_ofx, "availcash", to_decimal, "available_cash")
+        apply(invbal_ofx, "marginbalance", to_decimal, "margin_balance")
+        apply(invbal_ofx, "shortbalance", to_decimal, "short_balance")
+        apply(invbal_ofx, "buypower", to_decimal, "buying_power")
 
-        ballist_ofx = invbal_ofx.find("ballist")
-        if ballist_ofx is not None:
-            statement.balance_list = []
-            for balance_ofx in ballist_ofx.findAll("bal"):
-                brokerage_balance = BrokerageBalance()
-                name_ofx = balance_ofx.find("name")
-                if name_ofx is not None:
-                    brokerage_balance.name = name_ofx.contents[0].strip()
-                description_ofx = balance_ofx.find("desc")
-                if description_ofx is not None:
-                    brokerage_balance.description = \
-                        description_ofx.contents[0].strip()
-                value_ofx = balance_ofx.find("value")
-                if value_ofx is not None:
-                    brokerage_balance.value = to_decimal(value_ofx)
-                statement.balance_list.append(brokerage_balance)
+        balance_list = invbal_ofx.find("ballist")
+        if balance_list is not None:
+            for balance_node in balance_list.findAll("bal"):
+                brokerage_balance = _default_brokerage_balance()
+                apply = apply_contents(brokerage_balance)
+                apply(balance_node, "name")
+                apply(balance_node, "desc", alias="description")
+                apply(balance_node, "value", to_decimal)
+                statement["balance_list"].append(brokerage_balance)
+
+
 
     return statement
 
 
-def parse_org(node):
-    institution = Institution()
-    org = node.find("org")
-    if hasattr(org, "contents"):
-        institution.organization = org.contents[0].strip()
+def _default_institution():
+    return {"organization": str, "fid": str}
 
-    fid = node.find("fid")
-    if hasattr(fid, "contents"):
-        institution.fid = fid.contents[0].strip()
 
+def parse_org(node) -> tp.Institution:
+    institution = _default_institution()
+    apply = apply_contents(institution)
+    apply(node, "org", alias="organization")
+    apply(node, "fid")
     return institution
 
 
-def parse_signon_response(sonrs):
-    items = [
-        "code",
-        "severity",
-        "dtserver",
-        "language",
-        "dtprofup",
-        "org",
-        "fid",
-        "intu.bid",
-        "message"
-    ]
-    idict = {}
-    for i in items:
-        try:
-            idict[i] = sonrs.find(i).contents[0].strip()
-        except Exception:
-            idict[i] = None
-    idict["code"] = int(idict["code"])
-    if idict["message"] is None:
-        idict["message"] = ""
+def _default_signon() -> tp.Signon:
+    return {
+        "code": None,
+        "severity": None,
+        "message": None,
+        "dtserver": None,
+        "language": None,
+        "dtprofup": None,
+        "fi_org": None,
+        "fi_fid": None,
+        "intu_bid": None,
+        "success": False,
+    }
 
-    return Signon(idict)
+def parse_signon_response(node) -> tp.Signon:
+    signon = _default_signon()
+    apply = apply_contents(signon)
+    apply(node, "code", int)
+    apply(node, "severity")
+    apply(node, "dserver")
+    apply(node, "language")
+    apply(node, "dtprofup")
+    apply(node, "org")
+    apply(node, "fid")
+    apply(node, "intu.bid")
+    apply(node, "message", lambda x: "" if x is None else x)
+    return signon
+
+
+def _default_account() -> tp.OFXAccount:
+    return {
+        "currency": "USD",
+        "statement": None,
+        "account_id": "",
+        "routing_number": "",
+        "branch_id": "",
+        "account_type": "",
+        "institution": "",
+        "type": tp.AccountType.Unknown,
+        "warnings": [],
+        "description": "",
+    }
 
 
 def parse_accounts(
     statements: t.Iterable,
-    account_type: AccountType
-) -> t.Iterable[Account]:
+    account_type: tp.AccountType,
+) -> t.Iterable[tp.OFXAccount]:
     """ Parse the <STMTRS> tags and return a list of Accounts object. """
-    rv = []
     for statement in statements:
-        account = Account()
-
-        currency = statement.find("curdef")
-        if currency and currency.contents:
-            account.curdef = currency.contents[0].strip()
-
-        account_id = statement.find("acctid")
-        if account_id and account_id.contents:
-            account.account_id = account_id.contents[0].strip()
-
-        bank_id = statement.find("bankid")
-        if bank_id and bank_id.contents:
-            account.routing_number = bank_id.contents[0].strip()
-
-        branch_id = statement.find("branchid")
-        if branch_id and branch_id.contents:
-            account.branch_id = branch_id.contents[0].strip()
-
-        type_ = statement.find("accttype")
-        if type_ and type_.contents:
-            account.account_type = type_.contents[0].strip()
-        account.type = account_type
-
-        if statement:
-            account.statement = parse_statement(statement)
-        rv.append(account)
-    return rv
+        account = _default_account()
+        apply = apply_contents(account)
+        apply(statement, "curdef", alias="currency")
+        apply(statement, "acctid", alias="account_id")
+        apply(statement, "bankid", alias="bank_id")
+        apply(statement, "branchid", alias="branch_id")
+        apply(statement, "accttype", alias="account_type")
+        account["statement"] = parse_statement(statement)
+        yield account
 
 
 def parse_balance(
-    statement,
-    stmt_ofx,
+    statement: tp.Statement,
+    node,
     bal_tag_name,
     bal_attr,
     bal_date_attr,
-    bal_type_string
+    bal_type_string,
+    fail_fast: bool = True,
 ):
-    bal_tag = stmt_ofx.find(bal_tag_name)
+    bal_tag = node.find(bal_tag_name)
     if hasattr(bal_tag, "contents"):
         balamt_tag = bal_tag.find("balamt")
         dtasof_tag = bal_tag.find("dtasof")
         if hasattr(balamt_tag, "contents"):
             try:
-                setattr(statement, bal_attr, to_decimal(balamt_tag))
+                statement["balance"] = to_decimal(balamt_tag)
             except (IndexError, decimal.InvalidOperation):
-                statement.warnings.append(
+                statement["warnings"].append(
                     "%s balance amount was empty for %s"
-                    "" % (bal_type_string, stmt_ofx))
+                    "" % (bal_type_string, node))
                 if fail_fast:
                     raise ValueError(
                         "Empty %s balance " % bal_type_string)
@@ -821,94 +655,54 @@ def parse_balance(
                 setattr(statement, bal_date_attr, parse_ofx_date(
                     dtasof_tag.contents[0].strip()))
             except IndexError:
-                statement.warnings.append(
+                statement["warnings"].append(
                     "%s balance date was empty for %s"
-                    "" % (bal_type_string, stmt_ofx)
+                    "" % (bal_type_string, node)
                 )
                 if fail_fast:
                     raise
             except ValueError:
-                statement.warnings.append(
+                statement["warnings"].append(
                     "%s balance date was not allowed for %s"
-                    "" % (bal_type_string, stmt_ofx))
+                    "" % (bal_type_string, node))
                 if fail_fast:
                     raise
 
+def _default_statement() -> tp.Statement:
+    return {
+        "start_date": datetime.datetime(0, 0, 0),
+        "end_date": datetime.datetime(0, 0, 0),
+        "currency": "USD",
+        "transactions": [],
+        "discarded_entries": [],
+        "warnings": [],
+        "balance": decimal.Decimal(0),
+    }
 
-def parse_statement(node, fail_fast: bool = True) -> Statement:
+
+def parse_statement(node, fail_fast: bool = True) -> tp.Statement:
     """
     Parse a statement in ofx-land and return a Statement object.
     """
-    statement = Statement()
-    dtstart_tag = node.find("dtstart")
-    if hasattr(dtstart_tag, "contents"):
-        try:
-            statement.start_date = parse_ofx_date(
-                dtstart_tag.contents[0].strip())
-        except IndexError:
-            statement.warnings.append(
-                "Statement start date was empty for %s" % node)
-            if fail_fast:
-                raise
-        except ValueError:
-            statement.warnings.append(
-                "Statement start date was not allowed for %s"
-                "" % node
-            )
-            if fail_fast:
-                raise
-
-    date_end = node.find("dtend")
-    if hasattr(date_end, "contents"):
-        try:
-            statement.end_date = parse_ofx_date(
-                date_end.contents[0].strip())
-        except IndexError:
-            statement.warnings.append(
-                "Statement start date was empty for %s" % node)
-            if fail_fast:
-                raise
-        except ValueError:
-            msg = (
-                "Statement start date was not formatted "
-                "correctly for %s"
-            )
-            statement.warnings.append(msg % node)
-            if fail_fast:
-                raise
-        except TypeError:
-            statement.warnings.append(
-                "Statement start date was not allowed for %s"
-                "" % node
-            )
-            if fail_fast:
-                raise
-
-    currency_tag = node.find("curdef")
-    if hasattr(currency_tag, "contents"):
-        try:
-            statement.currency = currency_tag.contents[0].strip().lower()
-        except IndexError:
-            statement.warnings.append(
-                "Currency definition was empty for %s" % node)
-            if fail_fast:
-                raise
-
+    statement = _default_statement()
+    apply = apply_contents(statement)
+    apply(node, "dstart", parse_ofx_date, alias="start_date")
+    apply(node, "dtend", parse_ofx_date, alias="end_date")
+    apply(node, "curdef", parse_ofx_date, alias="currency")
     parse_balance(statement, node, "ledgerbal",
                      "balance", "balance_date", "ledger")
-
     parse_balance(statement, node, "availbal", "available_balance",
                      "available_balance_date", "ledger")
 
-    for transaction_node in node.findAll("stmttrn"):
+    for tx_node in node.findAll("stmttrn"):
         try:
-            statement.transactions.append(
-                parse_transaction(transaction_node))
+            statement["transactions"].append(
+                parse_transaction(tx_node))
         except ValueError:
-            ofxError = sys.exc_info()[1]
-            statement.discarded_entries.append({
-                "error": str(ofxError),
-                "content": transaction_node,
+            ofx_error = sys.exc_info()[1]
+            statement["discarded_entries"].append({
+                "error": str(ofx_error),
+                "content": tx_node,
             })
             if fail_fast:
                 raise
@@ -916,133 +710,61 @@ def parse_statement(node, fail_fast: bool = True) -> Statement:
     return statement
 
 
-def parse_transaction(node) -> Transaction:
+def _default_transaction() -> tp.Transaction:
+    return {
+        "payee": "",
+        "type": "",
+        "date": datetime.datetime(0, 0, 0),
+        "user_date": datetime.datetime(0, 0, 0),
+        "amount": decimal.Decimal(0),
+        "id": "",
+        "memo": "",
+        "sic": None,
+        "mcc": "",
+        "checknum": "",
+    }
+
+
+def _amount_to_decimal(val: str) -> decimal.Decimal:
+
+    try:
+        return decimal.Decimal(val)
+    except decimal.InvalidOperation:
+        if val in {"null", "-null"}:
+            return decimal.Decimal(0)
+        else:
+            raise ValueError(
+                "Invalid Transaction Amount: '%s'"
+                "" % val
+            )
+
+
+def parse_transaction(node, fail_fast: bool = True) -> tp.Transaction:
     """
     Parse a transaction in ofx-land and return a Transaction object.
     """
-    transaction = Transaction()
+    transaction = _default_transaction()
+    apply = apply_contents(transaction)
+    apply(node, "trntype", str.lower, alias="type")
+    apply(node, "name", alias="payee")
+    apply(node, "memo")
+    apply(node, "trnamt", _amount_to_decimal, alias="amount")
+    apply(node, "dtposted", parse_ofx_date, alias="date")
+    apply(node, "dtuser", parse_ofx_date, alias="user_date")
+    apply(node, "fitid", alias="id")
+    apply(node, "sic")
+    apply(node, "checknum")
 
-    type_ = tree.find("trntype")
-    if hasattr(type_, "contents"):
+    if transaction["sic"] is not None and transaction["sic"] in mcc.codes:
         try:
-            transaction.type = type_.contents[0].lower().strip()
-        except IndexError:
-            raise ValueError("Empty transaction type")
-        except TypeError:
-            raise ValueError("No Transaction type (a required field)")
-
-    name = tree.find("name")
-    if hasattr(name, "contents"):
-        try:
-            transaction.payee = name.contents[0].strip()
-        except IndexError:
-            raise ValueError("Empty transaction name")
-        except TypeError:
-            raise ValueError("No Transaction name (a required field)")
-
-    memo = tree.find("memo")
-    if hasattr(memo, "contents"):
-        try:
-            transaction.memo = memo.contents[0].strip()
-        except IndexError:
-            # Memo can be empty.
-            pass
-        except TypeError:
-            pass
-
-    amount = tree.find("trnamt")
-    if hasattr(amount, "contents"):
-        try:
-            transaction.amount = to_decimal(amount)
-        except IndexError:
-            raise ValueError("Invalid Transaction Date")
-        except decimal.InvalidOperation:
-            # Some banks use a null transaction for including interest
-            # rate changes on your statement.
-            if amount.contents[0].strip() in ("null", "-null"):
-                transaction.amount = 0
-            else:
-                raise ValueError(
-                    "Invalid Transaction Amount: '%s'" % amount.contents[0])
-        except TypeError:
-            raise ValueError(
-                "No Transaction Amount (a required field)")
-    else:
-        raise ValueError(
-            "Missing Transaction Amount (a required field)")
-
-    date = tree.find("dtposted")
-    if hasattr(date, "contents"):
-        try:
-            transaction.date = parse_ofx_date(
-                date.contents[0].strip())
-        except IndexError:
-            raise ValueError("Invalid Transaction Date")
-        except ValueError:
-            ve = sys.exc_info()[1]
-            raise ValueError(str(ve))
-        except TypeError:
-            raise ValueError(
-                "No Transaction Date (a required field)")
-    else:
-        raise ValueError(
-            "Missing Transaction Date (a required field)")
-
-    user_date = tree.find("dtuser")
-    if hasattr(user_date, "contents"):
-        try:
-            transaction.user_date = parse_ofx_date(
-                user_date.contents[0].strip())
-        except IndexError:
-            raise ValueError("Invalid Transaction User Date")
-        except ValueError:
-            ve = sys.exc_info()[1]
-            raise ValueError(str(ve))
-        except TypeError:
-            pass
-
-    id_ = tree.find("fitid")
-    if hasattr(id_, "contents"):
-        try:
-            transaction.id = id_.contents[0].strip()
-        except IndexError:
-            raise ValueError(
-                "Empty FIT id (a required field)")
-        except TypeError:
-            raise ValueError(
-                "No FIT id (a required field)")
-    else:
-        raise ValueError(
-            "Missing FIT id (a required field)")
-
-    sic_tag = tree.find("sic")
-    if hasattr(sic_tag, "contents"):
-        try:
-            transaction.sic = sic_tag.contents[0].strip()
-        except IndexError:
-            raise ValueError(
-                "Empty transaction Standard Industry Code (SIC)")
-    else:
-        raise ValuError("Missing SIC tag")
-
-    if transaction.sic is not None and transaction.sic in mcc.codes:
-        try:
-            transaction.mcc = mcc.codes.get(transaction.sic, "").get("combined \
-                description")
+            transaction["mcc"] = mcc.codes.get(
+                transaction["sic"], "").get("combined description")
         except IndexError:
             raise ValueError(
                 "Empty transaction Merchant Category Code (MCC)")
         except AttributeError:
             if fail_fast:
                 raise
-
-    checknum = tree.find("checknum")
-    if hasattr(checknum, "contents"):
-        try:
-            transaction.checknum = checknum.contents[0].strip()
-        except IndexError:
-            raise ValueError(
-                "Empty Check (or other reference) number")
 
     return transaction
 

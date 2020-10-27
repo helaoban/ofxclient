@@ -9,7 +9,7 @@ import typing as t
 
 from ofxhome import OFXHome
 
-from ofxclient.account import BankAccount, BrokerageAccount, CreditCardAccount
+from ofxclient.types import BankAccount, BrokerageAccount, CreditCardAccount
 from ofxclient.config import Config
 from ofxclient.institution import Institution
 from ofxclient.util import combined_download
@@ -114,7 +114,7 @@ def add_account_menu(args) -> None:
     menu_title("Add account")
     while True:
         print(
-"""
+            """
 
 ------
 Notice
@@ -158,7 +158,7 @@ def view_account_menu(account, args):
         client = institution.client()
 
         print(
-f"""
+            f"""
 Overview:
   Name:           %s" {account.description}
   Account Number: %s" {account.number_masked()}
@@ -174,7 +174,7 @@ Overview:
             print("  Broker ID:      %s" % account.broker_id)
 
         print(
-f"""
+            f"""
 Nerdy Info:
   Download Up To:        %s days" % args["days"]
   Username:              %s" % institution.username
@@ -190,7 +190,7 @@ Nerdy Info:
             print("  FI Broker Id:          %s" % institution.broker_id)
 
         print(
-f"""
+            f"""
   Client Id:             %s" % client.id
   App Ver:               %s" % client.app_version
   App Id:                %s" % client.app_id
