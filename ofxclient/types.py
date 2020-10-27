@@ -8,6 +8,13 @@ import typing as t
 import typing_extensions as te
 
 
+class ParseResult(te.TypedDict):
+    accounts: t.List[t.Union[OFXAccount, InvestmentAccount]]
+    securities: t.List[Security]
+    status: t.Optional[t.Dict[str, t.Any]]
+    signon: t.Optional[Signon]
+
+
 class Signon(te.TypedDict):
     code: t.Optional[str]
     severity: t.Optional[str]
@@ -109,7 +116,7 @@ class InvestmentStatement(te.TypedDict):
     margin_balance: decimal.Decimal
     buying_power: decimal.Decimal
     short_balance: decimal.Decimal
-    balance_list: t.List[BrokerageBalance]
+    balances: t.List[BrokerageBalance]
 
 
 class InvestmentTransaction(te.TypedDict):

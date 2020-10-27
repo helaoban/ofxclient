@@ -238,11 +238,20 @@ def serialize_signon(signon: tp.Signon) -> str:
 """
 
 
+def _default_parse_result() -> tp.ParseResult:
+    return {
+        "accounts": [],
+        "securities": [],
+        "status": None,
+        "signon": None,
+    }
+
+
 def parse_ofx(
     file_path: str,
     fail_fast: bool = True,
     custom_date_format: t.Optional[str] = None,
-) -> t.Iterable[tp.OFXAccount]:
+) -> tp.ParseResult:
     """
     parse is the main entry point for an OfxParser. It takes a file
     handle and an optional log_errors flag.
@@ -254,16 +263,14 @@ def parse_ofx(
     that statements will include bad transactions (which are marked).
 
     """
+    rv = _default_parse_result()
+
     with open(file_path, "r") as file:
         ofx_str = file.read()
 
     headers = clean_headers(
         decode_headers(extract_headers(ofx_str)))
     cleaned = clean_ofx_xml(ofx_str)
-    accounts = []
-    security_list = []
-    status: t.Optional[t.Dict[str, t.Any]] = None
-    signon = None
 
     node = ET.fromstring(cleaned)
 
@@ -271,56 +278,47 @@ def parse_ofx(
         raise ValueError("The ofx file is empty!")
 
     with has_node(node, "sonrs") as sonrs:
-        signon = parse_signon_response(sonrs)
+        rv["signon"] = parse_signon_response(sonrs)
 
     with has_node(node, "stmttrnrs") as transactions:
         with has_node(node, "status") as status_node:
-            status = {}
-            apply = apply_contents(status)
+            apply = apply_contents(rv["status"])
             apply(status_node, "code", int)
             apply(status_node, "severity")
             apply(status_node, "message")
 
     with has_node(node, "ccstmtrs") as cc_transactions:
-        cc_transactions_status = cc_transactions.find("status")
-        if cc_transactions_status:
-            status = {}
-            status["code"] = int(
-                cc_transactions_status.find("code").contents[0].strip()
-            )
-            status["severity"] = cc_transactions_status.find(
-                "severity").contents[0].strip()
-            message = cc_transactions_status.find("message")
-            status["message"] = (
-                message.contents[0].strip()
-                if message else None
-            )
+        with has_node(node, "status") as status_node:
+            apply = apply_contents(rv["status"])
+            apply(status_node, "code", int)
+            apply(status_node, "severity")
+            apply(status_node, "message")
 
     with has_nodes(node, "stmtrs") as statements:
         for account in parse_accounts(statements, tp.AccountType.Bank):
-            accounts.append(account)
+            rv["accounts"].append(account)
 
     with has_nodes(node, "ccstmtrs") as cc_statements:
         for account in parse_accounts(cc_statements, tp.AccountType.CreditCard):
-            accounts.append(account)
+            rv["accounts"].append(account)
 
-    with has_nodes(node, "invstmtrs") as investments:
-        for account in parse_investment_accounts(investments):
-            accounts.append(account)
+    with has_node(node, "invstmtrs") as investments:
+        for inv_account in parse_investment_accounts(investments):
+            rv["accounts"].append(inv_account)
 
         with has_node(investments, "seclist") as securities:
             for security in parse_security_list(securities):
-                security_list.append(security)
+                rv["securities"].append(security)
 
     with has_node(node, "acctinfors") as account_info:
         for account in parse_account_info(account_info, node):
-            accounts.append(account)
+            rv["accounts"].append(account)
 
     with has_node(node, "fi") as fi_ofx:
-        for account in accounts:
+        for a in rv["accounts"]:
             account["institution"] = parse_org(fi_ofx)
 
-    return accounts
+    return rv
 
 
 def parse_ofx_date(
@@ -505,7 +503,7 @@ def _default_investment_statement() -> tp.InvestmentStatement:
         "transactions": [],
         "discarded_entries": [],
         "warnings": [],
-        "balance_list": [],
+        "balances": [],
         "positions": [],
         "available_cash": decimal.Decimal(0),
         "margin_balance": decimal.Decimal(0),
@@ -555,13 +553,13 @@ def parse_investment_statement(
         apply(invbal, "buypower", to_decimal, "buying_power")
 
         with has_node(invbal, "ballist") as ballist:
-            for balance_node in ballist.findAll("bal"):
+            for balance_node in ballist.findall("bal"):
                 balance = _default_brokerage_balance()
                 apply = apply_contents(balance)
                 apply(balance_node, "name")
                 apply(balance_node, "desc", alias="description")
                 apply(balance_node, "value", to_decimal)
-                statement["balance_list"].append(balance)
+                statement["balances"].append(balance)
 
     return statement
 
