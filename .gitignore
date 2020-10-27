@@ -2,7 +2,6 @@
 .doctrees
 venv
 .venv
-
 *.py[co]
 
 # Packages
@@ -38,3 +37,5 @@ tests/python_keyring/keyring_pass.cfg
 
 #Mr Developer
 .mr.developer.cfg
+
+.envrc

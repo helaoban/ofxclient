@@ -38,13 +38,6 @@ setup(name='ofxclient',
               'ofxclient = ofxclient.cli:run'
           ]
       },
-      install_requires=[
-          "argparse",
-          "keyring",
-          "lxml",
-          "ofxhome",
-          "ofxparse>0.8",
-          "beautifulsoup4",
-      ],
+      install_requires=[],
       test_suite='tests',
-      )
+)

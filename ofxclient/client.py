@@ -1,9 +1,15 @@
 from http.client import HTTPSConnection
+import datetime as dt
 import logging
 import time
+from itertools import chain
 from urllib.parse import splittype, splithost
+import os
 import uuid
 import typing as t
+
+from . import types as tp
+from .parse import parse_ofx
 
 
 if t.TYPE_CHECKING:
@@ -52,15 +58,38 @@ class Client:
 
     def __init__(
         self,
-        institution,
+        institution: t.Optional[t.Tuple[str, str, str]] = None,
+        username: t.Optional[str] = None,
+        password: t.Optional[str] = None,
         client_id: t.Optional[str] = None,
-        app_id=DEFAULT_APP_ID,
-        app_version=DEFAULT_APP_VERSION,
-        ofx_version=DEFAULT_OFX_VERSION,
-        user_agent=DEFAULT_USER_AGENT,
-        accept=DEFAULT_ACCEPT,
+        app_id: str = DEFAULT_APP_ID,
+        app_version: str = DEFAULT_APP_VERSION,
+        ofx_version: str = DEFAULT_OFX_VERSION,
+        user_agent: str = DEFAULT_USER_AGENT,
+        accept: str = DEFAULT_ACCEPT,
     ) -> None:
+        if institution is None:
+            org = os.environ["OFX_ORG"]
+            fid = os.environ["OFX_FID"]
+            url = os.environ["OFX_URL"]
+            institution = org, fid, url
+
         self.institution = institution
+
+        if username is None:
+            try:
+                username = os.environ["OFX_USERNAME"]
+            except KeyError:
+                username = ""
+        self.username = username
+
+        if password is None:
+            try:
+                password = os.environ["OFX_PASSWORD"]
+            except KeyError:
+                password = ""
+        self.password = password
+
         self.client_id = client_id or ofx_uid()
         self.app_id = app_id
         self.app_version = app_version
@@ -81,7 +110,7 @@ class Client:
 
     def authenticated_query(
         self,
-        with_message: t.Optional[str] = None,
+        query: str = "",
         username: t.Optional[str] = None,
         password: t.Optional[str] = None,
     ) -> str:
@@ -90,33 +119,66 @@ class Client:
         If you pass a 'with_messages' array those queries will be passed along
         otherwise this will just be an authentication probe query only.
         """
-        u = username or self.institution.username
-        p = password or self.institution.password
+        u = username or self.username
+        p = password or self.password
+        signon = self._sign_on(u, p)
+        return f"""
 
-        contents = ["OFX", self._sign_on(username=u, password=p)]
-        if with_message:
-            contents.append(with_message)
-        return LINE_ENDING.join([self.header(), _tag(*contents)])
+OFXHEADER:100
+DATA:OFXSGML
+VERSION:{self.ofx_version}
+SECURITY:NONE
+ENCODING:USASCII
+CHARSET:1252
+COMPRESSION:NONE
+OLDFILEUID:NONE
+NEWFILEUID:{ofx_uid()}
 
-    def bank_account_query(self, number, date, account_type, bank_id):
-        """Bank account statement request"""
-        return self.authenticated_query(
-            self._bare_request(number, date, account_type, bank_id)
-        )
+<OFX>
+    {signon}
+    {query}
+</OFX>
+"""
 
-    def credit_card_account_query(self, number, date):
-        """CC Statement request"""
-        return self.authenticated_query(self._credit_card_request(number, date))
+    def query_account_list(
+        self,
+        date="19700101000000"
+    ) -> tp.ParseResult:
+        return self.post(
+            self.authenticated_query(self._account_request(date)))
 
-    def brokerage_account_query(self, number, date, broker_id):
-        return self.authenticated_query(
-            self._investment_request(broker_id, number, date)
-        )
+    def query_bank_accounts(
+        self,
+        account_id: str,
+        date: str,
+        account_type: str,
+        bank_id: str,
+    ) -> tp.ParseResult:
+        account_req = self._bare_request(
+            account_id, date, account_type, bank_id)
+        query = self.authenticated_query(account_req)
+        return self.post(query)
 
-    def account_list_query(self, date="19700101000000"):
-        return self.authenticated_query(self._account_request(date))
+    def query_credit_cards(
+        self,
+        account_id: str,
+        date: str,
+    ) -> tp.ParseResult:
+        query = self.authenticated_query(
+            self._credit_card_request(account_id, date))
+        return self.post(query)
 
-    def post(self, query):
+    def query_brokerage_accounts(
+        self,
+        account_id: str,
+        date: str,
+        broker_id: str,
+    ) -> tp.ParseResult:
+        query = self.authenticated_query(
+            self._investment_request(broker_id, account_id, date))
+        return self.post(query)
+
+    def post(self, query: str) -> tp.ParseResult:
         """
         Wrapper around ``_do_post()`` to handle accounts that require
         sending back session cookies (``self.set_cookies`` True).
@@ -128,10 +190,14 @@ class Client:
                 "Got 0-length 200 response with Set-Cookies header; "
                 "retrying request with cookies"
             )
-            _, response = self._do_post(query, [("Cookie", cookies)])
-        return response
+            _, response = self._do_post(query, ("Cookie", cookies))
+        return parse_ofx(response)
 
-    def _do_post(self, query, extra_headers=[]) -> t.Tuple[HTTPResponse, str]:
+    def _do_post(
+        self,
+        query: str,
+        *extra_headers: t.Tuple[str, str],
+    ) -> t.Tuple[HTTPResponse, str]:
         """
         Do a POST to the Institution.
 
@@ -143,22 +209,19 @@ class Client:
         :return: 2-tuple of (HTTPResponse, str response body)
         :rtype: tuple
         """
-        logging.debug("posting data to %s" % self.institution.url)
-        garbage, path = splittype(self.institution.url)
+        _, _, url = self.institution
+        logging.debug("posting data to %s" % url)
+        garbage, path = splittype(url)
         host, selector = splithost(path)
         h = HTTPSConnection(host, timeout=60)
         # Discover requires a particular ordering of headers, so send the
         # request step by step.
         h.putrequest("POST", selector, skip_host=True, skip_accept_encoding=True)
 
-        headers = {
-            **DEFAULT_HEADERS,
-            **{
-                "Host": host,
-                "Content-Length": len(query),
-            }
-            ** extra_headers,
-        }
+        headers = {"Host": host, "Content-Length": str(len(query))}
+        for key, val in chain(DEFAULT_HEADERS.items(), extra_headers):
+            headers[key] = val
+
         logging.debug("---- request headers ----")
         for name, value in headers.items():
             logging.debug("%s: %s", name, value)
@@ -179,72 +242,75 @@ class Client:
         self.cookie += 1
         return str(self.cookie)
 
-    def header(self):
-        parts = [
-            "OFXHEADER:100",
-            "DATA:OFXSGML",
-            "VERSION:%d" % int(self.ofx_version),
-            "SECURITY:NONE",
-            "ENCODING:USASCII",
-            "CHARSET:1252",
-            "COMPRESSION:NONE",
-            "OLDFILEUID:NONE",
-            "NEWFILEUID:" + ofx_uid(),
-            "",
-        ]
-        return LINE_ENDING.join(parts)
-
     def _sign_on(self, username: str, password: str) -> str:
         """Generate signon message"""
-        fidata = [_field("ORG", self.institution.org)]
-        if self.institution.id:
-            fidata.append(_field("FID", self.institution.id))
-
-        if str(self.ofx_version) == "103":
-            client_uid = _field("CLIENTUID", self.client_id)
-        else:
-            client_uid = ""
-
-        return _tag(
-            "SIGNONMSGSRQV1",
-            _tag(
-                "SONRQ",
-                _field("DTCLIENT", now()),
-                _field("USERID", username),
-                _field("USERPASS", password),
-                _field("LANGUAGE", "ENG"),
-                _tag("FI", *fidata),
-                _field("APPID", self.app_id),
-                _field("APPVER", self.app_version),
-                client_uid,
-            ),
-        )
+        org, fid, _ = self.institution
+        return f"""
+<SIGNONMSGSRQV1>
+    <SONRQ>
+        <DTCLIENT>{to_ofx_date(dt.datetime.utcnow())}</DTCLIENT>
+        <USERID>{username}</USERID>
+        <USERPASS>{password}</USERPASS>
+        <LANGUAGE>ENG</LANGUAGE>
+        <FI>
+            <ORG>{org}</ORG>
+            <FID>{fid}</FID>
+        </FI>
+        <APPID>{self.app_id}</APPID>
+        <APPVER>{self.app_version}</APPVER>
+        <CLIENTUID>{self.client_id}</CLIENTUID>
+    </SONRQ>
+</SIGNONMSGSRQV1>
+"""
 
     def _account_request(self, dtstart):
-        req = _tag("ACCTINFORQ", _field("DTACCTUP", dtstart))
+        req = f"""
+<ACCTINFORQ>
+    <DTACCTUP>{start_date}</DTACCTUP>
+</ACCTINFORQ>
+"""
         return self._message("SIGNUP", "ACCTINFO", req)
 
     # this is from _credit_card_request below and reading
     # page 176 of the latest OFX doc.
-    def _bare_request(self, acctid, dtstart, accttype, bankid):
-        req = _tag(
-            "STMTRQ",
-            _tag(
-                "BANKACCTFROM",
-                _field("BANKID", bankid),
-                _field("ACCTID", acctid),
-                _field("ACCTTYPE", accttype),
-            ),
-            _tag("INCTRAN", _field("DTSTART", dtstart), _field("INCLUDE", "Y")),
-        )
+    def _bare_request(
+        self,
+        account_id: str,
+        start_date: str,
+        account_type: str,
+        bank_id: str,
+    ) -> str:
+        req = f"""
+<STMRQ>
+    <BANKACCTFROM>
+        <BANKID>{bank_id}</BANKID>
+        <ACCTID>{account_id}</ACCTID>
+        <ACCTTYPE>{account_type}</ACCTTYPE>
+    </BANKACCTFROM>
+    <INCTRAN>
+        <DSTART>{start_date}</DSTART>
+        <INCLUDE>Y</INCLUDE>
+    </INCTRAN>
+</STMRQ>
+"""
         return self._message("BANK", "STMT", req)
 
-    def _credit_card_request(self, acctid, dtstart):
-        req = _tag(
-            "CCSTMTRQ",
-            _tag("CCACCTFROM", _field("ACCTID", acctid)),
-            _tag("INCTRAN", _field("DTSTART", dtstart), _field("INCLUDE", "Y")),
-        )
+    def _credit_card_request(
+        self,
+        account_id: str,
+        start_date: str,
+    ) -> str:
+        req = f"""
+<CCSTMRQ>
+    <CCACCTFROM>
+        <ACCTID>{account_id}</ACCTID>
+    </CCACCTFROM>
+    <INCTRAN>
+        <DSTART>{start_date}</DSTART>
+        <INCLUDE>Y</INCLUDE>
+    </INCTRAN>
+</CCSTMRQ>
+"""
         return self._message("CREDITCARD", "CCSTMT", req)
 
     def _investment_request(
@@ -253,39 +319,39 @@ class Client:
         account_id: str,
         start_date: str,
     ) -> str:
-        req = _tag(
-            "INVSTMTRQ",
-            _tag(
-                "INVACCTFROM",
-                _field("BROKERID", broker_id),
-                _field("ACCTID", account_id),
-            ),
-            _tag("INCTRAN", _field("DTSTART", start_date), _field("INCLUDE", "Y")),
-            _field("INCOO", "Y"),
-            _tag("INCPOS", _field("DTASOF", now()), _field("INCLUDE", "Y")),
-            _field("INCBAL", "Y"),
-        )
+        req = f"""
+<INVSTMTRQ>
+    <INVACCTFROM>
+        <BROKERID>{broker_id}</BROKERID>
+        <ACCTID>{account_id}</ACCTID>
+    </INVACCTFROM>
+    <INCTRAN>
+        <DSTART>{start_date}</DSTART>
+        <INCLUDE>Y</INCLUDE>
+    </INCTRAN>
+    <INCOO>Y</INCOO>
+    <INCTRAN>
+        <DSTART>{to_ofx_date(dt.datetime.utcnow())}</DSTART>
+        <INCLUDE>Y</INCLUDE>
+    </INCTRAN>
+    <INCBAL>Y</INCBAL>
+</INVSTMTRQ>
+"""
         return self._message("INVSTMT", "INVSTMT", req)
 
-    def _message(self, msgType, trnType, request) -> str:
-        return _tag(
-            msgType + "MSGSRQV1",
-            _tag(
-                trnType + "TRNRQ",
-                _field("TRNUID", ofx_uid()),
-                _field("CLTCOOKIE", self.next_cookie()),
-                request,
-            ),
-        )
 
-
-def _field(tag: str, value: str) -> str:
-    return "<" + tag + ">" + value
-
-
-def _tag(tag: str, *contents: str) -> str:
-    return LINE_ENDING.join(["<" + tag + ">"] + list(contents) + ["</" + tag + ">"])
-
-
-def now():
-    return time.strftime("%Y%m%d%H%M%S", time.localtime())
+    def _message(
+        self,
+        msg_type: str,
+        trn_type: str,
+        request: str
+    ) -> str:
+        return f"""
+<{msg_type}MSGRQV1>
+    <{trn_type}TRNRQ>
+        <TRNUID>{ofx_uid}</TRNUID>
+        <CLTCOOKIE>{self.next_cookie()}</TRNUID>
+    </{trn_type}TRNRQ>
+    {request}
+</{msg_type}MSGRQV1>
+"""

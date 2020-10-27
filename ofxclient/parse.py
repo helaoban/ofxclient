@@ -10,6 +10,7 @@ import typing as t
 import xml.etree.ElementTree as ET
 
 from . import mcc, types as tp
+from .helpers import from_ofx_date
 
 if t.TYPE_CHECKING:
     Transformer = t.Callable[[str], t.Any]
@@ -321,43 +322,6 @@ def parse_ofx(
     return rv
 
 
-def parse_ofx_date(
-    date_str: str,
-    format: t.Optional[str] = None,
-) -> datetime.datetime:
-    # dateAsString looks something like 20101106160000.00[-5:EST]
-    # for 6 Nov 2010 4pm UTC-5 aka EST
-
-    # Some places (e.g. Newfoundland) have non-integer offsets.
-    res = re.search(r"\[(?P<tz>[-+]?\d+\.?\d*)\:\w*\]$", date_str)
-    if res:
-        tz = float(res.group("tz"))
-    else:
-        tz = 0
-
-    tz_offset = datetime.timedelta(hours=tz)
-
-    res = re.search(r"^[0-9]*\.([0-9]{0,5})", date_str)
-    if res:
-        msec = datetime.timedelta(seconds=float("0." + res.group(1)))
-    else:
-        msec = datetime.timedelta(seconds=0)
-
-    try:
-        local_date = datetime.datetime.strptime(date_str[:14], "%Y%m%d%H%M%S")
-        return local_date - tz_offset + msec
-    except ValueError:
-        if date_str[:8] == "00000000":
-            raise
-
-        if not format:
-            return datetime.datetime.strptime(
-                date_str[:8], "%Y%m%d") - tz_offset + msec
-        else:
-            return datetime.datetime.strptime(
-                date_str[:8], format) - tz_offset + msec
-
-
 def parse_account_info(
     account_info: ET.Element,
     node: ET.Element,
@@ -461,14 +425,14 @@ def _default_position() -> tp.Position:
     }
 
 
-def parse_investment_position(node) -> tp.Position:
+def parse_investment_position(node: ET.Element) -> tp.Position:
     position = _default_position()
     apply = apply_contents(position)
     apply(node, "uniqueid", alias="security")
     apply(node, "units", to_decimal)
     apply(node, "unit_price", to_decimal, alias="unit_price")
     apply(node, "mktval", to_decimal, alias="market_value")
-    apply(node, "dtpriceasof", parse_ofx_date, alias="market_value")
+    apply(node, "dtpriceasof", from_ofx_date, alias="market_value")
     return position
 
 
@@ -481,8 +445,8 @@ def parse_investment_transaction(node) -> tp.InvestmentTransaction:
     apply = apply_contents(transaction)
     apply(node, "fitid")
     apply(node, "memo")
-    apply(node, "dttrade", "trade_date", transform=parse_ofx_date)
-    apply(node, "dtsettle", "settle_date", transform=parse_ofx_date)
+    apply(node, "dttrade", "trade_date", transform=from_ofx_date)
+    apply(node, "dtsettle", "settle_date", transform=from_ofx_date)
     apply(node, "uniqueid", "security")
     apply(node, "incometype", "income_type")
     apply(node, "units", transform=to_decimal)
@@ -660,7 +624,7 @@ def parse_balance(
     with has_node(bal_tag, "dtasof") as dtasof_tag:
         if not dtasof_tag.text:
             raise ValueError("Missing balance date")
-        statement["balance_date"] = parse_ofx_date(dtasof_tag.text)
+        statement["balance_date"] = from_ofx_date(dtasof_tag.text)
 
 
 def _default_statement() -> tp.Statement:
@@ -684,9 +648,9 @@ def parse_statement(node: ET.Element, fail_fast: bool = True) -> tp.Statement:
     """
     statement = _default_statement()
     apply = apply_contents(statement)
-    apply(node, "dstart", parse_ofx_date, alias="start_date")
-    apply(node, "dtend", parse_ofx_date, alias="end_date")
-    apply(node, "curdef", parse_ofx_date, alias="currency")
+    apply(node, "dstart", from_ofx_date, alias="start_date")
+    apply(node, "dtend", from_ofx_date, alias="end_date")
+    apply(node, "curdef", from_ofx_date, alias="currency")
     parse_balance(statement, node, "ledgerbal",
                      "balance", "balance_date", "ledger")
     parse_balance(statement, node, "availbal", "available_balance",
@@ -747,8 +711,8 @@ def parse_transaction(node) -> tp.Transaction:
     apply(node, "name", alias="payee")
     apply(node, "memo")
     apply(node, "trnamt", _amount_to_decimal, alias="amount")
-    apply(node, "dtposted", parse_ofx_date, alias="date")
-    apply(node, "dtuser", parse_ofx_date, alias="user_date")
+    apply(node, "dtposted", from_ofx_date, alias="date")
+    apply(node, "dtuser", from_ofx_date, alias="user_date")
     apply(node, "fitid", alias="id")
     apply(node, "sic")
     apply(node, "checknum")
