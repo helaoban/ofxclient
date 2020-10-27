@@ -35,14 +35,25 @@ class OFXAccount(te.TypedDict):
     routing_number: str
     branch_id: str
     account_type: str
-    institution: str
+    institution: t.Optional[Institution]
     type: AccountType
     warnings: t.List[str]
     description: str
 
 
-class InvestmentAccount(OFXAccount):
+class InvestmentAccount(te.TypedDict):
+    currency: t.Optional[str]
+    statement: t.Optional[InvestmentStatement]
+    account_id: str
+    routing_number: str
+    branch_id: str
+    account_type: str
+    institution: t.Optional[Institution]
+    type: AccountType
+    warnings: t.List[str]
+    description: str
     broker_id: str
+
 
 
 class BrokerageBalance(te.TypedDict):
@@ -54,8 +65,8 @@ class BrokerageBalance(te.TypedDict):
 class Security(te.TypedDict):
     unique_id: str
     name: str
-    ticker: str
-    memo: str
+    ticker: t.Optional[str]
+    memo: t.Optional[str]
 
 
 class Transaction(te.TypedDict):
@@ -86,7 +97,7 @@ class InvestmentStatement(te.TypedDict):
     start_date: datetime.datetime
     end_date: datetime.datetime
     currency: str
-    transactions: t.List[InvestmentTransaction]
+    transactions: t.List[t.Union[InvestmentTransaction, Transaction]]
     # Error tracking:
     discarded_entries: t.List[t.Dict[str, t.Any]]
     warnings: t.List[str]
