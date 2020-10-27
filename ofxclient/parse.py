@@ -13,6 +13,10 @@ from bs4 import BeautifulSoup
 
 from . import mcc, types as tp
 
+if t.TYPE_CHECKING:
+    Transformer = t.Callable[[str], t.Any]
+
+
 TX_TYPES = [
     "posmf",
     "posstock",
@@ -45,18 +49,30 @@ AGGREGATE_TYPES = [
 ]
 
 
+@contextlib.contextmanager
+def has_node(node, name: str):
+    child_node = node.find(name)
+    if not child_node:
+        return
+    yield child_node
+
+
+@contextlib.contextmanager
+def has_nodes(node, name: str):
+    child_nodes = node.findAll(name)
+    if not child_nodes:
+        return
+    yield child_nodes
+
+
 def noop(val: str) -> str:
     return val
-
-
-if t.TYPE_CHECKING:
-    Transformer = t.Callable[[str], t.Any]
 
 
 def extract_contents(node, name: str) -> t.Optional[str]:
     tag = node.find(name)
     if not hasattr(tag, "contents"):
-        return
+        return None
     return tag.contents[0].strip()
 
 
@@ -236,34 +252,28 @@ def parse_ofx(
         decode_headers(extract_headers(ofx_str)))
     cleaned = clean_ofx_xml(ofx_str)
     accounts = []
+    security_list = None
+    status: t.Optional[t.Dict[str, t.Any]] = None
     signon = None
 
     node = BeautifulSoup(cleaned, "html.parser")
     if node.find("ofx") is None:
         raise ValueError("The ofx file is empty!")
 
-    signon_ofx = node.find("sonrs")
-    if signon_ofx:
-        signon = parse_signon_response(signon_ofx)
+    with has_node(node, "sonrs") as sonrs:
+        signon = parse_signon_response(sonrs)
 
-    transactions = node.find("stmttrnrs")
-    if transactions:
-        trnuid = extract_content(transactions, "trnuid")
+    with has_node(node, "stmttrnrs") as transactions:
+        trnuid = extract_contents(transactions, "trnuid")
 
-        transactions_status = transactions.find("status")
-        if transactions_status:
+        with has_node(node, "status") as status_node:
             status = {}
-            status["code"] = int(
-                transactions_status.find("code").contents[0].strip()
-            )
-            status["severity"] = \
-                transactions_status.find("severity").contents[0].strip()
-            message = transactions_status.find("message")
-            status["message"] = \
-                message.contents[0].strip() if message else None
+            apply = apply_contents(status)
+            apply(status_node, "code", int)
+            apply(status_node, "severity")
+            apply(status_node, "message")
 
-    cc_transactions = node.find("ccstmttrnrs")
-    if cc_transactions:
+    with has_node(node, "ccstmtrs") as cc_transactions:
         cc_transactions_trnuid = cc_transactions.find("trnuid")
         if cc_transactions_trnuid:
             trnuid = cc_transactions_trnuid.contents[0].strip()
@@ -280,27 +290,21 @@ def parse_ofx(
             status["message"] = \
                 message.contents[0].strip() if message else None
 
-    statements = node.findAll("stmtrs")
-    if statements:
+    with has_nodes(node, "stmtrs") as statements:
         for account in parse_accounts(statements, tp.AccountType.Bank):
             accounts.append(account)
 
-    ccstmtrs_ofx = node.findAll("ccstmtrs")
-    cc_statements = node.findAll("ccstmtrs")
-    if ccstmtrs_ofx:
-        for account in parse_accounts(ccstmtrs_ofx, tp.AccountType.CreditCard):
+    with has_nodes(node, "ccstmtrs") as cc_statements:
+        for account in parse_accounts(cc_statements, tp.AccountType.CreditCard):
             accounts.append(account)
 
-    investments = node.findAll("invstmtrs")
-    if investments:
+    with has_nodes(node, "invstmtrs") as investments:
         for account in parse_investment_accounts(investments):
             accounts.append(account)
 
         security_list = node.find("seclist")
-        if security_list:
-            security_list = parse_security_list(security_list)
-        else:
-            security_list = None
+        with has_node(investments, "seclist") as securities:
+            security_list = parse_security_list(securities)
 
     account_info = node.find("acctinfors")
     if account_info:
