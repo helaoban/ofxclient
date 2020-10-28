@@ -410,12 +410,21 @@ def parse_security_list(node: ET.Element) -> t.Iterable[tp.Security]:
         yield parse_security(security_info)
 
 
-def parse_security(
-    node: ET.Element,
-) -> tp.Security:
+def _default_security() -> tp.Security:
+    return {
+        "unique_id": "",
+        "name": "",
+        "ticker": "",
+        "memo": "",
+    }
 
-    unique_id_node = security_info.find("uniqueid")
-    name_node = security_info.find("secname")
+
+def parse_security(node: ET.Element) -> tp.Security:
+    security = _default_security()
+    apply = apply_contents(security)
+
+    unique_id_node = node.find("uniqueid")
+    name_node = node.find("secname")
 
     if not unique_id_node:
         raise ValueError("Security node missing UNIQUEID node")
@@ -427,12 +436,12 @@ def parse_security(
     name = get_text_or_raise(name_node)
 
     ticker = None
-    ticker_node = security_info.find("ticker")
+    ticker_node = node.find("ticker")
     if ticker_node and ticker_node.text:
         ticker = ticker_node.text.strip()
 
     memo = None
-    memo_node = security_info.find("memo")
+    memo_node = node.find("memo")
     if memo_node and memo_node.text:
         ticker = memo_node.text.strip()
 

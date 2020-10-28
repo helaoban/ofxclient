@@ -6,10 +6,8 @@ import os
 import os.path
 import sys
 import typing as t
+from . import json
 
-from ofxclient.types import BankAccount, BrokerageAccount, CreditCardAccount
-from ofxclient.institution import Institution
-from ofxclient.util import combined_download
 from ofxclient.client import Client, DEFAULT_OFX_VERSION, working_query
 from ofxclient.parse import parse_ofx
 
@@ -49,15 +47,15 @@ def parse_args() -> t.Dict[str, t.Any]:
 def test_parse(args: dict) -> None:
     input = sys.stdin.read()
     result = parse_ofx(input)
-    print(result)
+    print(json.dumps(result))
 
 
 def account_info(args: dict) -> None:
     if args["verbose"]:
         logging.basicConfig(level=logging.DEBUG)
     client = Client()
-    response = client.post(working_query())
-    print(response)
+    response = client.query_account_list()
+    print(json.dumps(response))
 
 
 def main():

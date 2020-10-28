@@ -2,8 +2,27 @@ import datetime as dt
 import re
 import typing as t
 import uuid
+import xml.etree.ElementTree as ET
 
 OFX_DATE_FORMAT = "%Y%m%d%H%M%S"
+
+
+def xml_strip(node: ET.Element):
+    for child_node in node:
+        for x in child_node.iter():
+            if x.text:
+                x.text = x.text.strip()
+            if x.tail:
+                x.tail = x.tail.strip()
+    return node
+
+
+def clean_query(query: str) -> str:
+    tree = ET.fromstring(query.strip())
+    return ET.tostring(
+        xml_strip(tree),
+        encoding="unicode"
+    ).replace("\n", "")
 
 
 def ofx_uid():

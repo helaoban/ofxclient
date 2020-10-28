@@ -3,15 +3,18 @@ import datetime as dt
 import logging
 import time
 from itertools import chain
-from urllib.parse import splittype, splithost
+from urllib.parse import urlparse
 import os
 import typing as t
 import uuid
+import re
+import xml.etree.ElementTree as ET
+import requests
 
 import pytz
 
 from . import types as tp
-from .helpers import to_ofx_date, ofx_uid, ofx_now
+from .helpers import to_ofx_date, ofx_uid, ofx_now, clean_query
 from .parse import parse_ofx
 
 
@@ -140,6 +143,23 @@ class Client:
             "accept": self.accept,
         }
 
+    def _add_header(self, query: str) -> str:
+        v = self.ofx_version
+        header = f"""
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?OFX OFXHEADER="200"
+    VERSION="{v}"
+    SECURITY="NONE"
+    OLDFILEUID="NONE"
+    NEWFILEUID="{uuid.uuid4()}"
+?>
+"""
+        return re.sub(
+            "\s+", " ", header.strip().replace("\n", "")) + query
+
+    def _wrap(self, query: str):
+        return self._add_header(clean_query(query))
+
     def authenticated_query(
         self,
         query: str = "",
@@ -157,19 +177,13 @@ class Client:
         signon = self._sign_on(u, p)
         return f"""
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-
-<?OFX
-    OFXHEADER="200"
+<?OFX OFXHEADER="200"
     VERSION="{v}"
     SECURITY="NONE"
     OLDFILEUID="NONE"
     NEWFILEUID="{uuid.uuid4()}"
 ?>
-
-<OFX>
-    {signon}
-    {query}
-</OFX>
+<OFX>{signon}{query}</OFX>
 """
 
     def query_profile(self) -> tp.ParseResult:
@@ -222,21 +236,32 @@ class Client:
         Wrapper around ``_do_post()`` to handle accounts that require
         sending back session cookies (``self.set_cookies`` True).
         """
-        res, response = self._do_post(query)
-        cookies = res.getheader("Set-Cookie", None)
-        if len(response) == 0 and cookies is not None and res.status == 200:
-            logging.debug(
-                "Got 0-length 200 response with Set-Cookies header; "
-                "retrying request with cookies"
-            )
-            _, response = self._do_post(query, ("Cookie", cookies))
-        return parse_ofx(response)
+        with requests.Session() as http_session:
+            http_response, ofx_data = self._do_post(query, session=http_session)
+            cookies = http_response.headers.get("Set-Cookie", None)
+            if (
+                len(ofx_data) == 0
+                and cookies is not None
+            ):
+                logging.debug(
+                    "Got 0-length 200 response with Set-Cookies header; "
+                    "retrying request with cookies"
+                )
+                _, ofx_data = self._do_post(query, session=http_session)
+        return parse_ofx(ofx_data)
+
+    def _print_headers(self, headers: t.Dict[str, str]) -> str:
+        rv = ""
+        for key, val in headers.items():
+            rv = rv + "%s: %s\n" % (key, val)
+        return rv
 
     def _do_post(
         self,
         query: str,
         *extra_headers: t.Tuple[str, str],
-    ) -> t.Tuple[HTTPResponse, str]:
+        session: t.Optional[requests.Session] = None,
+    ) -> t.Tuple[requests.Response, str]:
         """
         Do a POST to the Institution.
 
@@ -248,64 +273,42 @@ class Client:
         :return: 2-tuple of (HTTPResponse, str response body)
         :rtype: tuple
         """
+        if session is not None:
+            post = session.post
+        else:
+            post = requests.post
+
         _, _, url = self.institution
+        parsed_url = urlparse(url)
+        host = parsed_url.netloc
 
         logging.debug("posting data to %s" % url)
 
-        garbage, path = splittype(url)
-        host, selector = splithost(path)
-        h = HTTPSConnection(host, timeout=60)
-        # Discover requires a particular ordering of headers, so send the
-        # request step by step.
-        h.putrequest("POST", selector, skip_host=True, skip_accept_encoding=True)
-
-        # TODO Find out why stripping is necessary for query to work.
-        query = query.strip()
-        headers = {"Host": host, "Content-Length": str(len(query))}
+        query = self._wrap(query)
+        headers = {}
         for key, val in chain(DEFAULT_HEADERS.items(), extra_headers):
             headers[key] = val
 
-        header_log = ""
-        for name, value in headers.items():
-            header_log = header_log + "%s: %s\n" % (name, value)
-            h.putheader(name, value)
-
-        h.endheaders(query.encode())
-
-        logging.debug(f"""
----- request headers ----
-
-{header_log}
-
----- request body ----
-
-{query}
-"""
+        logging.debug(
+            "\n---- request headers ----\n\n"
+            f"{self._print_headers(headers)}\n"
+            "---- request body ----\n\n"
+            f"{query}\n"
         )
 
-        response = h.getresponse()
-        decoded = response.read().decode("ascii", "ignore")
+        response = post(url, data=query, headers=headers)
 
-        header_log = "\n".join(
-            "%s: %s" % (k, v) for k, v in response.getheaders())
-
-        logging.debug(f"""
----- response headers ----
-
-{header_log}
-
----- response body ----
-
-{decoded}
-"""
+        logging.debug(
+            "\n---- response headers ----\n\n"
+            f"{self._print_headers(dict(response.headers))}\n"
+            "---- response body ----\n\n"
+            f"{response.text}\n"
         )
 
-        if response.status >= 300:
-            raise RuntimeError(
-                f"Request failed ({response.status}): {response.reason}")
+        if response.status_code != 200:
+            response.raise_for_status()
 
-        response.close()
-        return response, decoded
+        return response, response.text
 
     def next_cookie(self) -> str:
         self.cookie += 1
