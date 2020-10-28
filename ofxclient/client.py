@@ -330,6 +330,7 @@ class Client:
         </FI>
         <APPID>{self.app_id}</APPID>
         <APPVER>{self.app_version}</APPVER>
+        <CLIENTUID>{self.client_id}</CLIENTUID>
     </SONRQ>
 </SIGNONMSGSRQV1>
 """
