@@ -1,26 +1,25 @@
-from http.client import HTTPSConnection
+from http.client import HTTPSConnection, HTTPResponse
 import datetime as dt
 import logging
 import time
 from itertools import chain
 from urllib.parse import splittype, splithost
 import os
-import uuid
 import typing as t
+import uuid
+
+import pytz
 
 from . import types as tp
+from .helpers import to_ofx_date, ofx_uid, ofx_now
 from .parse import parse_ofx
 
 
-if t.TYPE_CHECKING:
-    from http.client import HTTPResponse
-
 DEFAULT_APP_ID = "QWIN"
-DEFAULT_APP_VERSION = "2500"
-DEFAULT_OFX_VERSION = "102"
+DEFAULT_APP_VERSION = "2700"
+DEFAULT_OFX_VERSION = "220"
 DEFAULT_USER_AGENT = "httpclient"
 DEFAULT_ACCEPT = "*/*, application/x-ofx"
-
 DEFAULT_HEADERS = {
     "Accept": DEFAULT_ACCEPT,
     "User-Agent": DEFAULT_USER_AGENT,
@@ -31,8 +30,35 @@ DEFAULT_HEADERS = {
 LINE_ENDING = "\r\n"
 
 
-def ofx_uid():
-    return str(uuid.uuid4().hex)
+def working_query():
+    return f"""
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?OFX OFXHEADER="200" VERSION="220" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="{uuid.uuid4()}"?>
+<OFX>
+    <SIGNONMSGSRQV1>
+        <SONRQ>
+            <DTCLIENT>{ofx_now()}</DTCLIENT>
+            <USERID>edwardh759</USERID>
+            <USERPASS>Ardmore759!</USERPASS>
+            <LANGUAGE>ENG</LANGUAGE>
+            <FI>
+                <ORG>B1</ORG>
+                <FID>10898</FID>
+            </FI>
+            <APPID>QWIN</APPID>
+            <APPVER>2700</APPVER>
+        </SONRQ>
+    </SIGNONMSGSRQV1>
+    <SIGNUPMSGSRQV1>
+        <ACCTINFOTRNRQ>
+            <TRNUID>b0302a78-cea3-407a-a54a-3d95012beff5</TRNUID>
+            <ACCTINFORQ>
+                <DTACCTUP>19901231000000.000[0:GMT]</DTACCTUP>
+            </ACCTINFORQ>
+        </ACCTINFOTRNRQ>
+    </SIGNUPMSGSRQV1>
+</OFX>
+"""
 
 
 class Client:
@@ -90,7 +116,13 @@ class Client:
                 password = ""
         self.password = password
 
-        self.client_id = client_id or ofx_uid()
+        if client_id is None:
+            try:
+                client_id = os.environ["OFX_CLIENT_ID"]
+            except KeyError:
+                client_id = ofx_uid()
+
+        self.client_id = client_id
         self.app_id = app_id
         self.app_version = app_version
         self.ofx_version = ofx_version
@@ -121,18 +153,18 @@ class Client:
         """
         u = username or self.username
         p = password or self.password
+        v = self.ofx_version
         signon = self._sign_on(u, p)
         return f"""
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 
-OFXHEADER:100
-DATA:OFXSGML
-VERSION:{self.ofx_version}
-SECURITY:NONE
-ENCODING:USASCII
-CHARSET:1252
-COMPRESSION:NONE
-OLDFILEUID:NONE
-NEWFILEUID:{ofx_uid()}
+<?OFX
+    OFXHEADER="200"
+    VERSION="{v}"
+    SECURITY="NONE"
+    OLDFILEUID="NONE"
+    NEWFILEUID="{uuid.uuid4()}"
+?>
 
 <OFX>
     {signon}
@@ -140,17 +172,24 @@ NEWFILEUID:{ofx_uid()}
 </OFX>
 """
 
+    def query_profile(self) -> tp.ParseResult:
+        return self.post(
+            self.authenticated_query(self._profile_request()))
+
     def query_account_list(
         self,
-        date="19700101000000"
+        date: t.Optional[dt.datetime] = None,
     ) -> tp.ParseResult:
+        date = date or dt.datetime(
+            1990, 12, 31, tzinfo=pytz.UTC)
         return self.post(
-            self.authenticated_query(self._account_request(date)))
+            self.authenticated_query(
+                self._account_request(date)))
 
     def query_bank_accounts(
         self,
         account_id: str,
-        date: str,
+        date: dt.datetime,
         account_type: str,
         bank_id: str,
     ) -> tp.ParseResult:
@@ -162,7 +201,7 @@ NEWFILEUID:{ofx_uid()}
     def query_credit_cards(
         self,
         account_id: str,
-        date: str,
+        date: dt.datetime,
     ) -> tp.ParseResult:
         query = self.authenticated_query(
             self._credit_card_request(account_id, date))
@@ -171,7 +210,7 @@ NEWFILEUID:{ofx_uid()}
     def query_brokerage_accounts(
         self,
         account_id: str,
-        date: str,
+        date: dt.datetime,
         broker_id: str,
     ) -> tp.ParseResult:
         query = self.authenticated_query(
@@ -210,7 +249,9 @@ NEWFILEUID:{ofx_uid()}
         :rtype: tuple
         """
         _, _, url = self.institution
+
         logging.debug("posting data to %s" % url)
+
         garbage, path = splittype(url)
         host, selector = splithost(path)
         h = HTTPSConnection(host, timeout=60)
@@ -218,23 +259,51 @@ NEWFILEUID:{ofx_uid()}
         # request step by step.
         h.putrequest("POST", selector, skip_host=True, skip_accept_encoding=True)
 
+        # TODO Find out why stripping is necessary for query to work.
+        query = query.strip()
         headers = {"Host": host, "Content-Length": str(len(query))}
         for key, val in chain(DEFAULT_HEADERS.items(), extra_headers):
             headers[key] = val
 
-        logging.debug("---- request headers ----")
+        header_log = ""
         for name, value in headers.items():
-            logging.debug("%s: %s", name, value)
+            header_log = header_log + "%s: %s\n" % (name, value)
             h.putheader(name, value)
-        logging.debug("---- request body (query) ----")
-        logging.debug(query)
+
         h.endheaders(query.encode())
+
+        logging.debug(f"""
+---- request headers ----
+
+{header_log}
+
+---- request body ----
+
+{query}
+"""
+        )
+
         response = h.getresponse()
         decoded = response.read().decode("ascii", "ignore")
-        logging.debug("---- response ----")
-        logging.debug(response.__dict__)
-        logging.debug("Headers: %s", response.getheaders())
-        logging.debug(decoded)
+
+        header_log = "\n".join(
+            "%s: %s" % (k, v) for k, v in response.getheaders())
+
+        logging.debug(f"""
+---- response headers ----
+
+{header_log}
+
+---- response body ----
+
+{decoded}
+"""
+        )
+
+        if response.status >= 300:
+            raise RuntimeError(
+                f"Request failed ({response.status}): {response.reason}")
+
         response.close()
         return response, decoded
 
@@ -258,15 +327,32 @@ NEWFILEUID:{ofx_uid()}
         </FI>
         <APPID>{self.app_id}</APPID>
         <APPVER>{self.app_version}</APPVER>
-        <CLIENTUID>{self.client_id}</CLIENTUID>
     </SONRQ>
 </SIGNONMSGSRQV1>
 """
 
-    def _account_request(self, dtstart):
+    def _profile_request(
+        self,
+    ):
+        return f"""
+<PROFMSGSRQV1>
+    <PROFTRNRQ>
+        <TRNUID>{ofx_uid()}</TRNUID>
+        <PROFRQ>
+            <CLIENTROUTING>MSGSET</CLIENTROUTING>
+            <DTPROFUP>{to_ofx_date(dt.datetime.utcnow())}</DTPROFUP>
+        </PROFRQ>
+    </PROFTRNRQ>
+</PROFMSGSRQV1>
+"""
+
+    def _account_request(
+        self,
+        start_date: dt.datetime,
+    ) -> str:
         req = f"""
 <ACCTINFORQ>
-    <DTACCTUP>{start_date}</DTACCTUP>
+    <DTACCTUP>{to_ofx_date(start_date)}</DTACCTUP>
 </ACCTINFORQ>
 """
         return self._message("SIGNUP", "ACCTINFO", req)
@@ -276,7 +362,7 @@ NEWFILEUID:{ofx_uid()}
     def _bare_request(
         self,
         account_id: str,
-        start_date: str,
+        start_date: dt.datetime,
         account_type: str,
         bank_id: str,
     ) -> str:
@@ -288,7 +374,7 @@ NEWFILEUID:{ofx_uid()}
         <ACCTTYPE>{account_type}</ACCTTYPE>
     </BANKACCTFROM>
     <INCTRAN>
-        <DSTART>{start_date}</DSTART>
+        <DSTART>{to_ofx_date(start_date)}</DSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
 </STMRQ>
@@ -298,7 +384,7 @@ NEWFILEUID:{ofx_uid()}
     def _credit_card_request(
         self,
         account_id: str,
-        start_date: str,
+        start_date: dt.datetime,
     ) -> str:
         req = f"""
 <CCSTMRQ>
@@ -306,7 +392,7 @@ NEWFILEUID:{ofx_uid()}
         <ACCTID>{account_id}</ACCTID>
     </CCACCTFROM>
     <INCTRAN>
-        <DSTART>{start_date}</DSTART>
+        <DSTART>{to_ofx_date(start_date)}</DSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
 </CCSTMRQ>
@@ -317,7 +403,7 @@ NEWFILEUID:{ofx_uid()}
         self,
         broker_id: str,
         account_id: str,
-        start_date: str,
+        start_date: dt.datetime,
     ) -> str:
         req = f"""
 <INVSTMTRQ>
@@ -326,7 +412,7 @@ NEWFILEUID:{ofx_uid()}
         <ACCTID>{account_id}</ACCTID>
     </INVACCTFROM>
     <INCTRAN>
-        <DSTART>{start_date}</DSTART>
+        <DSTART>{to_ofx_date(start_date)}</DSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
     <INCOO>Y</INCOO>
@@ -347,11 +433,10 @@ NEWFILEUID:{ofx_uid()}
         request: str
     ) -> str:
         return f"""
-<{msg_type}MSGRQV1>
+<{msg_type}MSGSRQV1>
     <{trn_type}TRNRQ>
-        <TRNUID>{ofx_uid}</TRNUID>
-        <CLTCOOKIE>{self.next_cookie()}</TRNUID>
+        <TRNUID>{ofx_uid()}</TRNUID>
+        {request}
     </{trn_type}TRNRQ>
-    {request}
-</{msg_type}MSGRQV1>
+</{msg_type}MSGSRQV1>
 """

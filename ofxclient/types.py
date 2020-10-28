@@ -8,13 +8,6 @@ import typing as t
 import typing_extensions as te
 
 
-class ParseResult(te.TypedDict):
-    accounts: t.List[t.Union[OFXAccount, InvestmentAccount]]
-    securities: t.List[Security]
-    status: t.Optional[t.Dict[str, t.Any]]
-    signon: t.Optional[Signon]
-
-
 class Signon(te.TypedDict):
     code: t.Optional[str]
     severity: t.Optional[str]
@@ -22,10 +15,9 @@ class Signon(te.TypedDict):
     dtserver: t.Optional[str]
     language: t.Optional[str]
     dtprofup: t.Optional[str]
-    fi_org: t.Optional[str]
-    fi_fid: t.Optional[str]
+    org: t.Optional[str]
+    fid: t.Optional[str]
     intu_bid: t.Optional[str]
-    success: bool
 
 
 class AccountType(enum.Enum):
@@ -33,34 +25,6 @@ class AccountType(enum.Enum):
     Bank = 1
     CreditCard = 2
     Investment = 3
-
-
-class OFXAccount(te.TypedDict):
-    currency: t.Optional[str]
-    statement: t.Optional[Statement]
-    account_id: str
-    routing_number: str
-    branch_id: str
-    account_type: str
-    institution: t.Optional[Institution]
-    type: AccountType
-    warnings: t.List[str]
-    description: str
-
-
-class InvestmentAccount(te.TypedDict):
-    currency: t.Optional[str]
-    statement: t.Optional[InvestmentStatement]
-    account_id: str
-    routing_number: str
-    branch_id: str
-    account_type: str
-    institution: t.Optional[Institution]
-    type: AccountType
-    warnings: t.List[str]
-    description: str
-    broker_id: str
-
 
 
 class BrokerageBalance(te.TypedDict):
@@ -76,6 +40,14 @@ class Security(te.TypedDict):
     memo: t.Optional[str]
 
 
+class Position(te.TypedDict):
+    security: str
+    units: decimal.Decimal
+    unit_price: decimal.Decimal
+    market_value: decimal.Decimal
+    date: datetime.datetime
+
+
 class Transaction(te.TypedDict):
     payee: str
     type: str
@@ -87,6 +59,21 @@ class Transaction(te.TypedDict):
     sic: t.Optional[str]
     mcc: str
     checknum: str
+
+
+class InvestmentTransaction(te.TypedDict):
+    type: str
+    trade_date: t.Optional[datetime.datetime]
+    settle_date: None
+    memo: str
+    security: str
+    income_type: str
+    units: decimal.Decimal
+    unit_price: decimal.Decimal
+    commission: decimal.Decimal
+    fees: decimal.Decimal
+    total: decimal.Decimal
+    tferaction: t.Optional[str]
 
 
 class Statement(te.TypedDict):
@@ -119,32 +106,43 @@ class InvestmentStatement(te.TypedDict):
     balances: t.List[BrokerageBalance]
 
 
-class InvestmentTransaction(te.TypedDict):
-    type: str
-    trade_date: t.Optional[datetime.datetime]
-    settle_date: None
-    memo: str
-    security: str
-    income_type: str
-    units: decimal.Decimal
-    unit_price: decimal.Decimal
-    commission: decimal.Decimal
-    fees: decimal.Decimal
-    total: decimal.Decimal
-    tferaction: t.Optional[str]
-
-
-class Position(te.TypedDict):
-    security: str
-    units: decimal.Decimal
-    unit_price: decimal.Decimal
-    market_value: decimal.Decimal
-    date: datetime.datetime
-
-
 class Institution(te.TypedDict):
     organization: str
     fid: str
+
+
+class OFXAccount(te.TypedDict):
+    currency: t.Optional[str]
+    statement: t.Optional[Statement]
+    account_id: str
+    routing_number: str
+    branch_id: str
+    account_type: str
+    institution: t.Optional[Institution]
+    type: AccountType
+    warnings: t.List[str]
+    description: str
+
+
+class InvestmentAccount(te.TypedDict):
+    currency: t.Optional[str]
+    statement: t.Optional[InvestmentStatement]
+    account_id: str
+    routing_number: str
+    branch_id: str
+    account_type: str
+    institution: t.Optional[Institution]
+    type: AccountType
+    warnings: t.List[str]
+    description: str
+    broker_id: str
+
+
+class ParseResult(te.TypedDict):
+    accounts: t.List[t.Union[OFXAccount, InvestmentAccount]]
+    securities: t.List[Security]
+    status: t.Optional[t.Dict[str, t.Any]]
+    signon: t.Optional[Signon]
 
 
 class Account(object):

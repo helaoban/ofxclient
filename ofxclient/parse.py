@@ -48,6 +48,21 @@ AGGREGATE_TYPES = [
 ]
 
 
+def raise_error() -> None:
+    raise RuntimeError()
+
+
+def with_node(node: ET.Element, name: str) -> t.Iterable[ET.Element]:
+    child_node = node.find(name.upper())
+    if not child_node:
+        return []
+    return [child_node]
+
+
+def with_nodes(node: ET.Element, name: str) -> t.Iterable[ET.Element]:
+    return node.findall(name.upper())
+
+
 @contextlib.contextmanager
 def has_node(node: ET.Element, name: str) -> t.Iterator[ET.Element]:
     child_node = node.find(name)
@@ -97,8 +112,12 @@ def apply_contents(d: t.Any) -> t.Callable[..., None]:
     ) -> None:
         nonlocal d
         alias = alias or name
-        child_node = node.find(name)
-        if not child_node or not child_node.text:
+        child_node = node.find(name.upper())
+
+        # TODO WARNING, Element is falsey if it
+        # has no children! This is incredibly bad,
+        # but we cannoo change eeet.
+        if child_node is None or child_node.text is None:
             return
 
         try:
@@ -106,7 +125,7 @@ def apply_contents(d: t.Any) -> t.Callable[..., None]:
         except Exception as error:
             raise ValueError(
                 "Error while trying to extract contents "
-                f"from tag {name}"
+                f"from tag {name.upper()}"
             ) from error
 
         try:
@@ -115,8 +134,10 @@ def apply_contents(d: t.Any) -> t.Callable[..., None]:
         except Exception as error:
             raise RuntimeError(
                 "Error while trying to transform contents "
-                f"from tag {name} using transform {t}"
+                f"from tag {name.upper()} using transform {t}"
             ) from error
+
+        d[name] = contents
 
     return _do_apply
 
@@ -249,8 +270,7 @@ def _default_parse_result() -> tp.ParseResult:
 
 
 def parse_ofx(
-    file_path: str,
-    fail_fast: bool = True,
+    ofx_str: str,
     custom_date_format: t.Optional[str] = None,
 ) -> tp.ParseResult:
     """
@@ -266,56 +286,51 @@ def parse_ofx(
     """
     rv = _default_parse_result()
 
-    with open(file_path, "r") as file:
-        ofx_str = file.read()
-
     headers = clean_headers(
         decode_headers(extract_headers(ofx_str)))
     cleaned = clean_ofx_xml(ofx_str)
-
     node = ET.fromstring(cleaned)
 
-    if node.find("ofx") is None:
-        raise ValueError("The ofx file is empty!")
+    for signon_messages in with_node(node, "signonmsgsrsv1"):
+        for sonrs in with_node(signon_messages, "sonrs"):
+            rv["signon"] = parse_signon_response(sonrs)
 
-    with has_node(node, "sonrs") as sonrs:
-        rv["signon"] = parse_signon_response(sonrs)
-
-    with has_node(node, "stmttrnrs") as transactions:
-        with has_node(node, "status") as status_node:
+    for transactions in with_node(node, "stmttrnrs"):
+        for status_node in with_node(transactions, "status"):
             apply = apply_contents(rv["status"])
             apply(status_node, "code", int)
             apply(status_node, "severity")
             apply(status_node, "message")
 
-    with has_node(node, "ccstmtrs") as cc_transactions:
-        with has_node(node, "status") as status_node:
+    for cc_transactions in with_node(node, "ccstmtrs"):
+        for status_node in with_node(cc_transactions, "status"):
             apply = apply_contents(rv["status"])
             apply(status_node, "code", int)
             apply(status_node, "severity")
             apply(status_node, "message")
 
-    with has_nodes(node, "stmtrs") as statements:
-        for account in parse_accounts(statements, tp.AccountType.Bank):
+    for statement in with_nodes(node, "stmtrs"):
+        account = parse_account(statement, tp.AccountType.Bank)
+        rv["accounts"].append(account)
+
+    for cc_statement in with_nodes(node, "ccstmtrs"):
+        account = parse_account(statement, tp.AccountType.CreditCard)
+        rv["accounts"].append(account)
+
+    for inv_statement in with_nodes(node, "invstmtrs"):
+        inv_account = parse_investment_account(inv_statement)
+        rv["accounts"].append(inv_account)
+
+    for investments in with_node(node, "invstmtrs"):
+        for security_node in with_nodes(investments, "seclist"):
+            security = parse_security(security_node)
+            rv["securities"].append(security)
+
+    for account_info_node in with_node(node, "acctinfors"):
+        for account in parse_account_info(account_info_node, node):
             rv["accounts"].append(account)
 
-    with has_nodes(node, "ccstmtrs") as cc_statements:
-        for account in parse_accounts(cc_statements, tp.AccountType.CreditCard):
-            rv["accounts"].append(account)
-
-    with has_node(node, "invstmtrs") as investments:
-        for inv_account in parse_investment_accounts(investments):
-            rv["accounts"].append(inv_account)
-
-        with has_node(investments, "seclist") as securities:
-            for security in parse_security_list(securities):
-                rv["securities"].append(security)
-
-    with has_node(node, "acctinfors") as account_info:
-        for account in parse_account_info(account_info, node):
-            rv["accounts"].append(account)
-
-    with has_node(node, "fi") as fi_ofx:
+    for fi_ofx in with_node(node, "fi"):
         for a in rv["accounts"]:
             account["institution"] = parse_org(fi_ofx)
 
@@ -372,47 +387,62 @@ def _default_investment_account() -> tp.InvestmentAccount:
 
 def parse_investment_accounts(
     node: t.Iterable[ET.Element],
-    fail_fast: bool = True,
 ) -> t.Iterable[tp.InvestmentAccount]:
     for child_node in node:
-        account = _default_investment_account()
-        apply = apply_contents(account)
-        apply(child_node, "acctid", alias="account_id")
-        apply(child_node, "brokerid", alias="broker_id")
-        account["type"] = tp.AccountType.Investment
-        account["statement"] = parse_investment_statement(child_node)
-        yield account
+        yield parse_investment_account(child_node)
 
 
-def parse_security_list(
+def parse_investment_account(
     node: ET.Element,
-) -> t.Iterable[tp.Security]:
+) -> tp.InvestmentAccount:
+    account = _default_investment_account()
+    apply = apply_contents(account)
+    apply(node, "acctid", alias="account_id")
+    apply(node, "brokerid", alias="broker_id")
+    account["type"] = tp.AccountType.Investment
+    account["statement"] = parse_investment_statement(node)
+    return account
+
+
+def parse_security_list(node: ET.Element) -> t.Iterable[tp.Security]:
     rv: t.List[tp.Security] = []
     for security_info in node.findall("secinfo"):
-        unique_id_node = security_info.find("uniqueid")
-        name_node = security_info.find("secname")
-
-        if unique_id_node and name_node:
-            unique_id = get_text_or_raise(unique_id_node)
-            name = get_text_or_raise(name_node)
-
-            ticker = None
-            ticker_node = security_info.find("ticker")
-            if ticker_node and ticker_node.text:
-                ticker = ticker_node.text.strip()
+        yield parse_security(security_info)
 
 
-            memo = None
-            memo_node = security_info.find("memo")
-            if memo_node and memo_node.text:
-                ticker = memo_node.text.strip()
+def parse_security(
+    node: ET.Element,
+) -> tp.Security:
 
-            yield {
-                "unique_id": unique_id,
-                "name": name,
-                "ticker": ticker,
-                "memo": memo,
-            }
+    unique_id_node = security_info.find("uniqueid")
+    name_node = security_info.find("secname")
+
+    if not unique_id_node:
+        raise ValueError("Security node missing UNIQUEID node")
+
+    if not name_node:
+        raise ValueError("Security node missing SECNAME node")
+
+    unique_id = get_text_or_raise(unique_id_node)
+    name = get_text_or_raise(name_node)
+
+    ticker = None
+    ticker_node = security_info.find("ticker")
+    if ticker_node and ticker_node.text:
+        ticker = ticker_node.text.strip()
+
+    memo = None
+    memo_node = security_info.find("memo")
+    if memo_node and memo_node.text:
+        ticker = memo_node.text.strip()
+
+    yield {
+        "unique_id": unique_id,
+        "name": name,
+        "ticker": ticker,
+        "memo": memo,
+    }
+
 
 
 def _default_position() -> tp.Position:
@@ -486,7 +516,6 @@ def _default_brokerage_balance() -> tp.BrokerageBalance:
 
 def parse_investment_statement(
     node: ET.Element,
-    fail_fast: bool = True
 ) -> tp.InvestmentStatement:
     statement = _default_investment_statement()
     apply = apply_contents(statement)
@@ -548,24 +577,29 @@ def _default_signon() -> tp.Signon:
         "dtserver": None,
         "language": None,
         "dtprofup": None,
-        "fi_org": None,
-        "fi_fid": None,
+        "org": None,
+        "fid": None,
         "intu_bid": None,
-        "success": False,
     }
 
-def parse_signon_response(node) -> tp.Signon:
+def parse_signon_response(node: ET.Element) -> tp.Signon:
     signon = _default_signon()
     apply = apply_contents(signon)
-    apply(node, "code", int)
-    apply(node, "severity")
-    apply(node, "dserver")
-    apply(node, "language")
-    apply(node, "dtprofup")
-    apply(node, "org")
-    apply(node, "fid")
+
+    for status_node in with_node(node, "status"):
+        apply(status_node, "code", int)
+        apply(status_node, "severity")
+        apply(status_node, "message", lambda x: "" if x is None else x)
+
+    for status_node in with_node(node, "fi"):
+        apply(status_node, "org")
+        apply(status_node, "fid")
+
     apply(node, "intu.bid")
-    apply(node, "message", lambda x: "" if x is None else x)
+    apply(node, "language")
+    apply(node, "dtserver", from_ofx_date)
+    apply(node, "dtprofup", from_ofx_date)
+
     return signon
 
 
@@ -590,16 +624,22 @@ def parse_accounts(
 ) -> t.Iterable[tp.OFXAccount]:
     """ Parse the <STMTRS> tags and return a list of Accounts object. """
     for statement in statements:
-        account = _default_account()
-        apply = apply_contents(account)
-        apply(statement, "curdef", alias="currency")
-        apply(statement, "acctid", alias="account_id")
-        apply(statement, "bankid", alias="bank_id")
-        apply(statement, "branchid", alias="branch_id")
-        apply(statement, "accttype", alias="account_type")
-        account["statement"] = parse_statement(statement)
-        yield account
+        yield parse_account(statement, account_type)
 
+
+def parse_account(
+    statement: ET.Element,
+    account_type: tp.AccountType,
+) -> tp.OFXAccount:
+    account = _default_account()
+    apply = apply_contents(account)
+    apply(statement, "curdef", alias="currency")
+    apply(statement, "acctid", alias="account_id")
+    apply(statement, "bankid", alias="bank_id")
+    apply(statement, "branchid", alias="branch_id")
+    apply(statement, "accttype", alias="account_type")
+    account["statement"] = parse_statement(statement)
+    return account
 
 def parse_balance(
     statement: tp.Statement,
@@ -642,7 +682,7 @@ def _default_statement() -> tp.Statement:
     }
 
 
-def parse_statement(node: ET.Element, fail_fast: bool = True) -> tp.Statement:
+def parse_statement(node: ET.Element) -> tp.Statement:
     """
     Parse a statement in ofx-land and return a Statement object.
     """
@@ -657,17 +697,8 @@ def parse_statement(node: ET.Element, fail_fast: bool = True) -> tp.Statement:
                      "available_balance_date", "ledger")
 
     for tx_node in node.findall("stmttrn"):
-        try:
-            statement["transactions"].append(
-                parse_transaction(tx_node))
-        except ValueError:
-            ofx_error = sys.exc_info()[1]
-            statement["discarded_entries"].append({
-                "error": str(ofx_error),
-                "content": tx_node,
-            })
-            if fail_fast:
-                raise
+        statement["transactions"].append(
+            parse_transaction(tx_node))
 
     return statement
 

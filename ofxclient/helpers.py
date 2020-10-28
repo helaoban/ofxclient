@@ -1,12 +1,25 @@
 import datetime as dt
 import re
 import typing as t
+import uuid
 
 OFX_DATE_FORMAT = "%Y%m%d%H%M%S"
 
 
+def ofx_uid():
+    return str(uuid.uuid4().hex)
+
+
+def ofx_now() -> str:
+    now = dt.datetime.utcnow()
+    return to_ofx_date(now)
+
+
 def to_ofx_date(date: dt.datetime) -> str:
-    return date.strftime(OFX_DATE_FORMAT)
+    millisecond = round(date.microsecond / 1000)
+    millisec_str = "{0:03d}".format(millisecond)
+    fmt = "%Y%m%d%H%M%S.{}[0:GMT]".format(millisec_str)
+    return date.strftime(fmt)
 
 
 def from_ofx_date(
