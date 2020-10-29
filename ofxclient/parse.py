@@ -8,6 +8,7 @@ import re
 import sys
 import typing as t
 import xml.etree.ElementTree as ET
+from itertools import chain
 
 from . import mcc, types as tp
 from .helpers import from_ofx_date
@@ -137,7 +138,7 @@ def apply_contents(d: t.Any) -> t.Callable[..., None]:
                 f"from tag {name.upper()} using transform {t}"
             ) from error
 
-        d[name] = contents
+        d[alias] = contents
 
     return _do_apply
 
@@ -251,8 +252,8 @@ def serialize_signon(signon: tp.Signon) -> str:
         <LANGUAGE>{signon['language']}</LANGUAGE>
         <DTPROFUP>{signon['dtprofup']}</DTPROFUP>
         <FI>
-            <ORG>{signon['fi_org']}</ORG>
-            <FID>{signon['fi_fid']}</FID>
+            <ORG>{signon['org']}</ORG>
+            <FID>{signon['fid']}</FID>
         </FI>
     </SONRS>
     <INTU.BID>{signon['intu_bid']}</INTU.BID>
@@ -273,17 +274,6 @@ def parse_ofx(
     ofx_str: str,
     custom_date_format: t.Optional[str] = None,
 ) -> tp.ParseResult:
-    """
-    parse is the main entry point for an OfxParser. It takes a file
-    handle and an optional log_errors flag.
-
-    If fail_fast is True, the parser will fail on any errors.
-    If fail_fast is False, the parser will log poor statements in the
-    statement class and continue to run. Note: the library does not
-    guarantee that no exceptions will be raised to the caller, only
-    that statements will include bad transactions (which are marked).
-
-    """
     rv = _default_parse_result()
 
     headers = clean_headers(
@@ -310,11 +300,11 @@ def parse_ofx(
             apply(status_node, "message")
 
     for statement in with_nodes(node, "stmtrs"):
-        account = parse_account(statement, tp.AccountType.Bank)
+        account = parse_account(statement)
         rv["accounts"].append(account)
 
     for cc_statement in with_nodes(node, "ccstmtrs"):
-        account = parse_account(statement, tp.AccountType.CreditCard)
+        account = parse_account(statement)
         rv["accounts"].append(account)
 
     for inv_statement in with_nodes(node, "invstmtrs"):
@@ -326,82 +316,12 @@ def parse_ofx(
             security = parse_security(security_node)
             rv["securities"].append(security)
 
-    for account_info_node in with_node(node, "acctinfors"):
-        for account in parse_account_info(account_info_node, node):
-            rv["accounts"].append(account)
-
-    for fi_ofx in with_node(node, "fi"):
-        for a in rv["accounts"]:
-            account["institution"] = parse_org(fi_ofx)
+    for account_info_node in node.iter("ACCTINFORS"):
+        for account_node in account_info_node.iter("ACCTINFO"):
+            account_ = parse_account(account_node)
+            rv["accounts"].append(account_)
 
     return rv
-
-
-def parse_account_info(
-    account_info: ET.Element,
-    node: ET.Element,
-) -> t.Iterable[tp.OFXAccount]:
-    fi = node.find("fi")
-
-    institution: t.Optional[tp.Institution]
-
-    if fi:
-        institution = parse_org(fi)
-    else:
-        institution = None
-
-    for node in account_info.findall("acctinfo"):
-        if node.find("bankacctinfo"):
-            for account in parse_accounts([node], tp.AccountType.Bank):
-                account["institution"] = institution
-                yield account
-
-        if node.find("ccacctinfo"):
-            for account in parse_accounts([node], tp.AccountType.CreditCard):
-                account["institution"] = institution
-                yield account
-
-        if node.find("invacctinfo"):
-            for inv_account in parse_investment_accounts([node]):
-                inv_account["institution"] = institution
-                yield account
-
-        # TODO: description field for accounts.
-
-
-def _default_investment_account() -> tp.InvestmentAccount:
-    return {
-        "currency": "USD",
-        "statement": None,
-        "account_id": "",
-        "routing_number": "",
-        "branch_id": "",
-        "account_type": "",
-        "institution": None,
-        "type": tp.AccountType.Unknown,
-        "warnings": [],
-        "description": "",
-        "broker_id": "",
-    }
-
-
-def parse_investment_accounts(
-    node: t.Iterable[ET.Element],
-) -> t.Iterable[tp.InvestmentAccount]:
-    for child_node in node:
-        yield parse_investment_account(child_node)
-
-
-def parse_investment_account(
-    node: ET.Element,
-) -> tp.InvestmentAccount:
-    account = _default_investment_account()
-    apply = apply_contents(account)
-    apply(node, "acctid", alias="account_id")
-    apply(node, "brokerid", alias="broker_id")
-    account["type"] = tp.AccountType.Investment
-    account["statement"] = parse_investment_statement(node)
-    return account
 
 
 def parse_security_list(node: ET.Element) -> t.Iterable[tp.Security]:
@@ -445,7 +365,7 @@ def parse_security(node: ET.Element) -> tp.Security:
     if memo_node and memo_node.text:
         ticker = memo_node.text.strip()
 
-    yield {
+    return {
         "unique_id": unique_id,
         "name": name,
         "ticker": ticker,
@@ -460,7 +380,7 @@ def _default_position() -> tp.Position:
         "units": decimal.Decimal(0),
         "unit_price": decimal.Decimal(0),
         "market_value": decimal.Decimal(0),
-        "date": datetime.datetime(0, 0, 0)
+        "date": datetime.datetime(1970, 12, 31)
     }
 
 
@@ -500,8 +420,8 @@ def parse_investment_transaction(node) -> tp.InvestmentTransaction:
 
 def _default_investment_statement() -> tp.InvestmentStatement:
     return {
-        "start_date": datetime.datetime(0, 0, 0),
-        "end_date": datetime.datetime(0, 0, 0),
+        "start_date": datetime.datetime(1970, 12, 31),
+        "end_date": datetime.datetime(1970, 12, 31),
         "currency": "USD",
         "transactions": [],
         "discarded_entries": [],
@@ -612,43 +532,41 @@ def parse_signon_response(node: ET.Element) -> tp.Signon:
     return signon
 
 
-def _default_account() -> tp.OFXAccount:
+def _default_account() -> tp.Account:
     return {
-        "currency": "USD",
-        "statement": None,
         "account_id": "",
         "routing_number": "",
-        "branch_id": "",
         "account_type": "",
-        "institution": None,
-        "type": tp.AccountType.Unknown,
-        "warnings": [],
         "description": "",
+        "branch_id": None,
+        "broker_id": None,
     }
 
 
-def parse_accounts(
-    statements: t.Iterable[ET.Element],
-    account_type: tp.AccountType,
-) -> t.Iterable[tp.OFXAccount]:
-    """ Parse the <STMTRS> tags and return a list of Accounts object. """
-    for statement in statements:
-        yield parse_account(statement, account_type)
-
-
-def parse_account(
-    statement: ET.Element,
-    account_type: tp.AccountType,
-) -> tp.OFXAccount:
+def parse_account(node: ET.Element) -> tp.Account:
     account = _default_account()
     apply = apply_contents(account)
-    apply(statement, "curdef", alias="currency")
-    apply(statement, "acctid", alias="account_id")
-    apply(statement, "bankid", alias="bank_id")
-    apply(statement, "branchid", alias="branch_id")
-    apply(statement, "accttype", alias="account_type")
-    account["statement"] = parse_statement(statement)
+    apply(node, "desc", alias="description")
+
+    try:
+        account_info = next(chain(
+            node.iter("BANKACCTFROM"),
+            node.iter("CCACCTROM"),
+            node.iter("INVACCTFROM"),
+        ))
+    except StopIteration as error:
+        raise ValueError(
+            "None of 'BANKACCTFROM', 'CCACCTFROM' "
+            "or 'INVACCTFROM' was found"
+        ) from error
+
+    apply(account_info, "acctid", alias="account_id")
+    apply(account_info, "bankid", alias="routing_number")
+    apply(account_info, "branchid", alias="branch_id")
+    apply(account_info, "accttype", alias="account_type")
+    apply(account_info, "brokerid", alias="broker_id")
     return account
+
 
 def parse_balance(
     statement: tp.Statement,
@@ -678,16 +596,16 @@ def parse_balance(
 
 def _default_statement() -> tp.Statement:
     return {
-        "start_date": datetime.datetime(0, 0, 0),
-        "end_date": datetime.datetime(0, 0, 0),
+        "start_date": datetime.datetime(1970, 12, 31),
+        "end_date": datetime.datetime(1970, 12, 31),
         "currency": "USD",
         "transactions": [],
         "discarded_entries": [],
         "warnings": [],
         "balance": decimal.Decimal(0),
-        "balance_date": datetime.datetime(0, 0, 0),
+        "balance_date": datetime.datetime(1970, 12, 31),
         "available_balance": decimal.Decimal(0),
-        "available_balance_date": datetime.datetime(0, 0, 0),
+        "available_balance_date": datetime.datetime(1970, 12, 31),
     }
 
 
@@ -716,8 +634,8 @@ def _default_transaction() -> tp.Transaction:
     return {
         "payee": "",
         "type": "",
-        "date": datetime.datetime(0, 0, 0),
-        "user_date": datetime.datetime(0, 0, 0),
+        "date": datetime.datetime(1970, 12, 31),
+        "user_date": datetime.datetime(1970, 12, 31),
         "amount": decimal.Decimal(0),
         "id": "",
         "memo": "",

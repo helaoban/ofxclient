@@ -61,8 +61,6 @@ class CustomJSONEncoder(JSONEncoder):
             return str(o)
         if isinstance(o, decimal.Decimal):
             return float(o)
-        if self.ignore_nan and math.isnan(o):
-            return None
         if not isinstance(o, (str, int, float, bool)):
             return str(o)
         return super().default(o)
