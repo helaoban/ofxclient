@@ -373,17 +373,16 @@ class Client:
         bank_id: str,
     ) -> str:
         req = f"""
-<STMRQ>
+<STMTRQ>
     <BANKACCTFROM>
         <BANKID>{bank_id}</BANKID>
         <ACCTID>{account_id}</ACCTID>
         <ACCTTYPE>{account_type}</ACCTTYPE>
     </BANKACCTFROM>
     <INCTRAN>
-        <DTSTART>20200927090000.000[0:GMT]</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
-</STMRQ>
+</STMTRQ>
 """
         return self._message("BANK", "STMT", req)
 
@@ -393,7 +392,7 @@ class Client:
         start_date: dt.datetime,
     ) -> str:
         req = f"""
-<CCSTMRQ>
+<CCSTMTRQ>
     <CCACCTFROM>
         <ACCTID>{account_id}</ACCTID>
     </CCACCTFROM>
@@ -401,7 +400,7 @@ class Client:
         <DTSTART>{to_ofx_date(start_date)}</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
-</CCSTMRQ>
+</CCSTMTRQ>
 """
         return self._message("CREDITCARD", "CCSTMT", req)
 

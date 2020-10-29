@@ -104,14 +104,13 @@ def statements(args: dict) -> None:
     client = Client()
     now = dt.datetime.utcnow()
     start_date = now - dt.timedelta(days=args["days"])
-    print(args)
     result = client.query_statements(
         account_id=args["account"],
         routing_number=args["routing_number"],
         start_date=start_date,
         account_type=args["account_type"],
     )
-    print(json.dumps(result["accounts"]))
+    print(json.dumps(result["transactions"]))
 
 
 def main():
