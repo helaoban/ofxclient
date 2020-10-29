@@ -200,15 +200,17 @@ class Client:
             self.authenticated_query(
                 self._account_request(date)))
 
-    def query_bank_accounts(
+    def query_statements(
         self,
         account_id: str,
-        date: dt.datetime,
-        account_type: str,
-        bank_id: str,
+        routing_number: str,
+        start_date: t.Optional[dt.datetime] = None,
+        account_type: str = "CHECKING",
     ) -> tp.ParseResult:
+        if start_date is None:
+            start_date = dt.datetime(1970, 12, 31)
         account_req = self._bare_request(
-            account_id, date, account_type, bank_id)
+            account_id, start_date, account_type, routing_number)
         query = self.authenticated_query(account_req)
         return self.post(query)
 
@@ -378,7 +380,7 @@ class Client:
         <ACCTTYPE>{account_type}</ACCTTYPE>
     </BANKACCTFROM>
     <INCTRAN>
-        <DSTART>{to_ofx_date(start_date)}</DSTART>
+        <DTSTART>20200927090000.000[0:GMT]</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
 </STMRQ>
@@ -396,7 +398,7 @@ class Client:
         <ACCTID>{account_id}</ACCTID>
     </CCACCTFROM>
     <INCTRAN>
-        <DSTART>{to_ofx_date(start_date)}</DSTART>
+        <DTSTART>{to_ofx_date(start_date)}</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
 </CCSTMRQ>
@@ -416,12 +418,12 @@ class Client:
         <ACCTID>{account_id}</ACCTID>
     </INVACCTFROM>
     <INCTRAN>
-        <DSTART>{to_ofx_date(start_date)}</DSTART>
+        <DTSTART>{to_ofx_date(start_date)}</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
     <INCOO>Y</INCOO>
     <INCTRAN>
-        <DSTART>{to_ofx_date(dt.datetime.utcnow())}</DSTART>
+        <DTSTART>{to_ofx_date(dt.datetime.utcnow())}</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
     <INCBAL>Y</INCBAL>

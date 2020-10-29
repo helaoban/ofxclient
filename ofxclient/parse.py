@@ -264,6 +264,7 @@ def serialize_signon(signon: tp.Signon) -> str:
 def _default_parse_result() -> tp.ParseResult:
     return {
         "accounts": [],
+        "transactions": [],
         "securities": [],
         "status": None,
         "signon": None,
@@ -299,17 +300,17 @@ def parse_ofx(
             apply(status_node, "severity")
             apply(status_node, "message")
 
-    for statement in with_nodes(node, "stmtrs"):
-        account = parse_account(statement)
-        rv["accounts"].append(account)
+    for transaction_node in node.iter("STMTTRN"):
+        transaction = parse_transaction(transaction_node)
+        rv["transactions"].append(transaction)
 
-    for cc_statement in with_nodes(node, "ccstmtrs"):
-        account = parse_account(statement)
-        rv["accounts"].append(account)
+    # for cc_statement in with_nodes(node, "ccstmtrs"):
+    #     account = parse_account(statement)
+    #     rv["accounts"].append(account)
 
-    for inv_statement in with_nodes(node, "invstmtrs"):
-        inv_account = parse_investment_account(inv_statement)
-        rv["accounts"].append(inv_account)
+    # for inv_statement in with_nodes(node, "invstmtrs"):
+    #     inv_account = parse_investment_account(inv_statement)
+    #     rv["accounts"].append(inv_account)
 
     for investments in with_node(node, "invstmtrs"):
         for security_node in with_nodes(investments, "seclist"):

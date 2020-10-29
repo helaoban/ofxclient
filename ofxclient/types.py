@@ -122,6 +122,7 @@ class Account(te.TypedDict):
 
 class ParseResult(te.TypedDict):
     accounts: t.List[Account]
+    transactions: t.List[Transaction]
     securities: t.List[Security]
     status: t.Optional[t.Dict[str, t.Any]]
     signon: t.Optional[Signon]
