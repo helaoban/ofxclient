@@ -380,6 +380,7 @@ class Client:
         <ACCTTYPE>{account_type}</ACCTTYPE>
     </BANKACCTFROM>
     <INCTRAN>
+        <DTSTART>{to_ofx_date(start_date)}</DTSTART>
         <INCLUDE>Y</INCLUDE>
     </INCTRAN>
 </STMTRQ>

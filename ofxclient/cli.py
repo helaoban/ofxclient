@@ -8,6 +8,7 @@ import sys
 import typing as t
 import datetime as dt
 from . import json
+import csv
 
 from ofxclient.client import Client, DEFAULT_OFX_VERSION, working_query
 from ofxclient.parse import parse_ofx
@@ -65,6 +66,13 @@ def parse_stmt_args(subparsers) -> None:
         type=int,
         help="number of days to download (default: %s)" % DOWNLOAD_DAYS,
     )
+    stmt.add_argument(
+        "-o", "--output-format",
+        type=str,
+        choices=("csv", "json"),
+        default="json",
+        help="Set verbosity level",
+    )
     stmt.set_defaults(func=statements)
 
 
@@ -110,7 +118,18 @@ def statements(args: dict) -> None:
         start_date=start_date,
         account_type=args["account_type"],
     )
-    print(json.dumps(result["transactions"]))
+
+    transactions = result["transactions"]
+
+    if args["output_format"] == "csv":
+        if len(transactions) == 0:
+            return
+        keys = transactions[0].keys()
+        writer = csv.DictWriter(sys.stdout, keys)
+        writer.writeheader()
+        writer.writerows(transactions)
+    else:
+        print(json.dumps(result["transactions"]))
 
 
 def main():
