@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "yofx"
+version = "0.1.0"
+description = ""
+authors = ["Carlo Holl <carloholl@gmail.com>"]
+packages = [
+    { include = "yofx" },
+]
+[tool.poetry.dependencies]
+python = "^3.6"
+typing_extensions = "^3.7.4"
+requests = "^2.24.0"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.4.2"
+mypy = ">=0.770"
+pylint = "^2.5.3"
+
+[tool.poetry.scripts]
+yofx = "yofx.cli:main"
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+    "bad-continuation",
+    "invalid-name",
+    "unused-argument",
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+]
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
