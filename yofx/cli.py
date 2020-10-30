@@ -10,8 +10,8 @@ import datetime as dt
 from . import json
 import csv
 
-from ofxclient.client import Client, DEFAULT_OFX_VERSION, working_query
-from ofxclient.parse import parse_ofx
+from .client import Client, DEFAULT_OFX_VERSION
+from .parse import parse_ofx
 
 AUTO_OPEN_DOWNLOADS = 1
 DOWNLOAD_DAYS = 30
