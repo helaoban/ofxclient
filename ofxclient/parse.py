@@ -11,73 +11,7 @@ import xml.etree.ElementTree as ET
 from itertools import chain
 
 from . import mcc, types as tp
-from .helpers import from_ofx_date
-
-if t.TYPE_CHECKING:
-    Transformer = t.Callable[[str], t.Any]
-
-
-TX_TYPES = [
-    "posmf",
-    "posstock",
-    "posopt",
-    "posother",
-    "posdebt"
-]
-
-AGGREGATE_TYPES = [
-    "buydebt",
-    "buymf",
-    "buyopt",
-    "buyother",
-    "buystock",
-    "closureopt",
-    "income",
-    "invexpense",
-    "jrnlfund",
-    "jrnlsec",
-    "margininterest",
-    "reinvest",
-    "retofcap",
-    "selldebt",
-    "sellmf",
-    "sellopt",
-    "sellother",
-    "sellstock",
-    "split",
-    "transfer"
-]
-
-
-def raise_error() -> None:
-    raise RuntimeError()
-
-
-def with_node(node: ET.Element, name: str) -> t.Iterable[ET.Element]:
-    child_node = node.find(name.upper())
-    if not child_node:
-        return []
-    return [child_node]
-
-
-def with_nodes(node: ET.Element, name: str) -> t.Iterable[ET.Element]:
-    return node.findall(name.upper())
-
-
-@contextlib.contextmanager
-def has_node(node: ET.Element, name: str) -> t.Iterator[ET.Element]:
-    child_node = node.find(name)
-    if not child_node:
-        return
-    yield child_node
-
-
-@contextlib.contextmanager
-def has_nodes(node: ET.Element, name: str) -> t.Iterator[t.Iterable[ET.Element]]:
-    child_nodes = node.findall(name)
-    if not child_nodes:
-        return
-    yield child_nodes
+from .helpers import from_ofx_date, to_decimal
 
 
 def noop(val: str) -> str:
@@ -99,48 +33,9 @@ def get_child_text_or_raise(node: ET.Element, child_name: str) -> str:
 
 def extract_contents(node: ET.Element, name: str) -> t.Optional[str]:
     child_node = node.find(name)
-    if not child_node or not child_node.text:
+    if child_node is None or not child_node.text:
         return None
     return child_node.text.strip()
-
-
-def apply_contents(d: t.Any) -> t.Callable[..., None]:
-    def _do_apply(
-        node: ET.Element,
-        name: str,
-        *transform: t.Callable[[str], t.Any],
-        alias: t.Optional[str] = None,
-    ) -> None:
-        nonlocal d
-        alias = alias or name
-        child_node = node.find(name.upper())
-
-        # TODO WARNING, Element is falsey if it
-        # has no children! This is incredibly bad,
-        # but we cannoo change eeet.
-        if child_node is None or child_node.text is None:
-            return
-
-        try:
-            contents = child_node.text.strip()
-        except Exception as error:
-            raise ValueError(
-                "Error while trying to extract contents "
-                f"from tag {name.upper()}"
-            ) from error
-
-        try:
-            for t in transform:
-                contents = t(contents)
-        except Exception as error:
-            raise RuntimeError(
-                "Error while trying to transform contents "
-                f"from tag {name.upper()} using transform {t}"
-            ) from error
-
-        d[alias] = contents
-
-    return _do_apply
 
 
 def clean_headers(headers: OrderedDict) -> OrderedDict:
@@ -239,315 +134,11 @@ def clean_ofx_xml(ofx_str: str) -> str:
     return cleaned
 
 
-def serialize_signon(signon: tp.Signon) -> str:
-        return f"""
-<SIGNONMSGSRSV1>
-    <SONRS>
-        <STATUS>
-            <CODE>{signon['code']}</CODE>
-            <SEVERITY>{signon['severity']}</SEVERITY>
-            <MESSAGE>{signon['message']}</MESSAGE>
-        </STATUS>
-        <DTSERVER>{signon['dtserver']}</DTSERVER>
-        <LANGUAGE>{signon['language']}</LANGUAGE>
-        <DTPROFUP>{signon['dtprofup']}</DTPROFUP>
-        <FI>
-            <ORG>{signon['org']}</ORG>
-            <FID>{signon['fid']}</FID>
-        </FI>
-    </SONRS>
-    <INTU.BID>{signon['intu_bid']}</INTU.BID>
-</SIGNONMSGSRSV1>
-"""
-
-
-def _default_parse_result() -> tp.ParseResult:
-    return {
-        "accounts": [],
-        "transactions": [],
-        "securities": [],
-        "status": None,
-        "signon": None,
-    }
-
-
-def parse_ofx(
-    ofx_str: str,
-    custom_date_format: t.Optional[str] = None,
-) -> tp.ParseResult:
-    rv = _default_parse_result()
-
-    headers = clean_headers(
-        decode_headers(extract_headers(ofx_str)))
-    cleaned = clean_ofx_xml(ofx_str)
-    node = ET.fromstring(cleaned)
-
-    for signon_messages in with_node(node, "signonmsgsrsv1"):
-        for sonrs in with_node(signon_messages, "sonrs"):
-            rv["signon"] = parse_signon_response(sonrs)
-
-    for transactions in with_node(node, "stmttrnrs"):
-        for status_node in with_node(transactions, "status"):
-            apply = apply_contents(rv["status"])
-            apply(status_node, "code", int)
-            apply(status_node, "severity")
-            apply(status_node, "message")
-
-    for cc_transactions in with_node(node, "ccstmtrs"):
-        for status_node in with_node(cc_transactions, "status"):
-            apply = apply_contents(rv["status"])
-            apply(status_node, "code", int)
-            apply(status_node, "severity")
-            apply(status_node, "message")
-
-    for transaction_node in node.iter("STMTTRN"):
-        transaction = parse_transaction(transaction_node)
-        rv["transactions"].append(transaction)
-
-    # for cc_statement in with_nodes(node, "ccstmtrs"):
-    #     account = parse_account(statement)
-    #     rv["accounts"].append(account)
-
-    # for inv_statement in with_nodes(node, "invstmtrs"):
-    #     inv_account = parse_investment_account(inv_statement)
-    #     rv["accounts"].append(inv_account)
-
-    for investments in with_node(node, "invstmtrs"):
-        for security_node in with_nodes(investments, "seclist"):
-            security = parse_security(security_node)
-            rv["securities"].append(security)
-
-    for account_info_node in node.iter("ACCTINFORS"):
-        for account_node in account_info_node.iter("ACCTINFO"):
-            account_ = parse_account(account_node)
-            rv["accounts"].append(account_)
-
-    return rv
-
-
-def parse_security_list(node: ET.Element) -> t.Iterable[tp.Security]:
-    rv: t.List[tp.Security] = []
-    for security_info in node.findall("secinfo"):
-        yield parse_security(security_info)
-
-
-def _default_security() -> tp.Security:
-    return {
-        "unique_id": "",
-        "name": "",
-        "ticker": "",
-        "memo": "",
-    }
-
-
-def parse_security(node: ET.Element) -> tp.Security:
-    security = _default_security()
-    apply = apply_contents(security)
-
-    unique_id_node = node.find("uniqueid")
-    name_node = node.find("secname")
-
-    if not unique_id_node:
-        raise ValueError("Security node missing UNIQUEID node")
-
-    if not name_node:
-        raise ValueError("Security node missing SECNAME node")
-
-    unique_id = get_text_or_raise(unique_id_node)
-    name = get_text_or_raise(name_node)
-
-    ticker = None
-    ticker_node = node.find("ticker")
-    if ticker_node and ticker_node.text:
-        ticker = ticker_node.text.strip()
-
-    memo = None
-    memo_node = node.find("memo")
-    if memo_node and memo_node.text:
-        ticker = memo_node.text.strip()
-
-    return {
-        "unique_id": unique_id,
-        "name": name,
-        "ticker": ticker,
-        "memo": memo,
-    }
-
-
-
-def _default_position() -> tp.Position:
-    return {
-        "security": "N/A",
-        "units": decimal.Decimal(0),
-        "unit_price": decimal.Decimal(0),
-        "market_value": decimal.Decimal(0),
-        "date": datetime.datetime(1970, 12, 31)
-    }
-
-
-def parse_investment_position(node: ET.Element) -> tp.Position:
-    position = _default_position()
-    apply = apply_contents(position)
-    apply(node, "uniqueid", alias="security")
-    apply(node, "units", to_decimal)
-    apply(node, "unit_price", to_decimal, alias="unit_price")
-    apply(node, "mktval", to_decimal, alias="market_value")
-    apply(node, "dtpriceasof", from_ofx_date, alias="market_value")
-    return position
-
-
-def _default_investment_transaction(name: str) -> tp.InvestmentTransaction:
-    pass
-
-
-def parse_investment_transaction(node) -> tp.InvestmentTransaction:
-    transaction = _default_investment_transaction(node.name)
-    apply = apply_contents(transaction)
-    apply(node, "fitid")
-    apply(node, "memo")
-    apply(node, "dttrade", "trade_date", transform=from_ofx_date)
-    apply(node, "dtsettle", "settle_date", transform=from_ofx_date)
-    apply(node, "uniqueid", "security")
-    apply(node, "incometype", "income_type")
-    apply(node, "units", transform=to_decimal)
-    apply(node, "unitprice", "unit_price", transform=to_decimal)
-    apply(node, "commission", transform=to_decimal)
-    apply(node, "fees", transform=to_decimal)
-    apply(node, "total", transform=to_decimal)
-    apply(node, "inv401ksource")
-    apply(node, "tferaction")
-    return transaction
-
-
-def _default_investment_statement() -> tp.InvestmentStatement:
-    return {
-        "start_date": datetime.datetime(1970, 12, 31),
-        "end_date": datetime.datetime(1970, 12, 31),
-        "currency": "USD",
-        "transactions": [],
-        "discarded_entries": [],
-        "warnings": [],
-        "balances": [],
-        "positions": [],
-        "available_cash": decimal.Decimal(0),
-        "margin_balance": decimal.Decimal(0),
-        "short_balance": decimal.Decimal(0),
-        "buying_power": decimal.Decimal(0),
-    }
-
-
-def _default_brokerage_balance() -> tp.BrokerageBalance:
-    return {
-        "name": "",
-        "description": "",
-        "value": decimal.Decimal(0),
-    }
-
-
-def parse_investment_statement(
-    node: ET.Element,
-) -> tp.InvestmentStatement:
-    statement = _default_investment_statement()
-    apply = apply_contents(statement)
-    apply(node, "curdef", str.lower, alias="currency")
-
-    with has_node(node, "invtranlist") as invtranlist_ofx:
-        apply(node, "dtstart", str.lower, alias="start_date")
-        apply(node, "dtend", str.lower, alias="end_date")
-
-    for transaction_type in TX_TYPES:
-        for tx_node in node.findall(transaction_type):
-            statement["positions"].append(
-                parse_investment_position(tx_node))
-
-    for transaction_type in AGGREGATE_TYPES:
-        for tx_node in node.findall(transaction_type):
-            statement["transactions"].append(
-                parse_investment_transaction(tx_node))
-
-    for transaction_node in node.findall("invbanktran"):
-        for tx_node in transaction_node.findall("stmttrn"):
-            statement["transactions"].append(parse_transaction(tx_node))
-
-    with has_node(node, "invbal") as invbal:
-        apply(invbal, "availcash", to_decimal, "available_cash")
-        apply(invbal, "marginbalance", to_decimal, "margin_balance")
-        apply(invbal, "shortbalance", to_decimal, "short_balance")
-        apply(invbal, "buypower", to_decimal, "buying_power")
-
-        with has_node(invbal, "ballist") as ballist:
-            for balance_node in ballist.findall("bal"):
-                balance = _default_brokerage_balance()
-                apply = apply_contents(balance)
-                apply(balance_node, "name")
-                apply(balance_node, "desc", alias="description")
-                apply(balance_node, "value", to_decimal)
-                statement["balances"].append(balance)
-
-    return statement
-
-
-def _default_institution():
-    return {"organization": str, "fid": str}
-
-
-def parse_org(node) -> tp.Institution:
-    institution = _default_institution()
-    apply = apply_contents(institution)
-    apply(node, "org", alias="organization")
-    apply(node, "fid")
-    return institution
-
-
-def _default_signon() -> tp.Signon:
-    return {
-        "code": None,
-        "severity": None,
-        "message": None,
-        "dtserver": None,
-        "language": None,
-        "dtprofup": None,
-        "org": None,
-        "fid": None,
-        "intu_bid": None,
-    }
-
-def parse_signon_response(node: ET.Element) -> tp.Signon:
-    signon = _default_signon()
-    apply = apply_contents(signon)
-
-    for status_node in with_node(node, "status"):
-        apply(status_node, "code", int)
-        apply(status_node, "severity")
-        apply(status_node, "message", lambda x: "" if x is None else x)
-
-    for status_node in with_node(node, "fi"):
-        apply(status_node, "org")
-        apply(status_node, "fid")
-
-    apply(node, "intu.bid")
-    apply(node, "language")
-    apply(node, "dtserver", from_ofx_date)
-    apply(node, "dtprofup", from_ofx_date)
-
-    return signon
-
-
-def _default_account() -> tp.Account:
-    return {
-        "account_id": "",
-        "routing_number": "",
-        "account_type": "",
-        "description": "",
-        "branch_id": None,
-        "broker_id": None,
-    }
-
-
 def parse_account(node: ET.Element) -> tp.Account:
-    account = _default_account()
-    apply = apply_contents(account)
-    apply(node, "desc", alias="description")
+    account = tp.defaults.account()
+    description = extract_contents(node, "DESC")
+    if description is not None:
+        account["description"] = description
 
     try:
         account_info = next(chain(
@@ -561,145 +152,210 @@ def parse_account(node: ET.Element) -> tp.Account:
             "or 'INVACCTFROM' was found"
         ) from error
 
-    apply(account_info, "acctid", alias="account_id")
-    apply(account_info, "bankid", alias="routing_number")
-    apply(account_info, "branchid", alias="branch_id")
-    apply(account_info, "accttype", alias="account_type")
-    apply(account_info, "brokerid", alias="broker_id")
+    account_id = extract_contents(account_info, "ACCTID")
+    if account_id is not None:
+        account["account_id"] = account_id
+
+    routing_number = extract_contents(account_info, "BANKID")
+    if routing_number is not None:
+        account["routing_number"] = routing_number
+
+    branch_id = extract_contents(account_info, "BRANCHID")
+    if branch_id is not None:
+        account["branch_id"] = branch_id
+
+    account_type = extract_contents(account_info, "ACCTTYPE")
+    if account_type is not None:
+        account["account_type"] = account_type
+
+    broker_id = extract_contents(account_info, "BROKERID")
+    if broker_id is not None:
+        account["broker_id"] = broker_id
+
     return account
 
 
+def parse_status(node: ET.Element) -> tp.Status:
+    rv = tp.defaults.status()
+
+    code = extract_contents(node, "CODE")
+    if code is not None:
+        rv["code"] = int(code)
+
+    severity = extract_contents(node, "SEVERITY")
+    if severity is not None:
+        rv["severity"] = severity
+
+    message = extract_contents(node, "MESSAGE")
+    if message is not None:
+        rv["message"] = message
+
+    return rv
+
+
+def parse_signon_response(node: ET.Element) -> tp.Signon:
+    rv = tp.defaults.signon()
+
+    status_node = node.find("STATUS")
+    if status_node is not None:
+        rv["status"] = parse_status(node)
+
+    intu_bid = extract_contents(node, "INTU.BID")
+    if intu_bid is not None:
+        rv["intu_bid"] = intu_bid
+
+    language = extract_contents(node, "LANGUAGE")
+    if language is not None:
+        rv["language"] = language
+
+    dtserver = extract_contents(node, "DTSERVER")
+    if dtserver is not None:
+        rv["dtserver"] = dtserver
+
+    dtprofup = extract_contents(node, "DTPROFUP")
+    if dtprofup is not None:
+        rv["dtprofup"] = dtprofup
+
+    return rv
+
+
 def parse_balance(
-    statement: tp.Statement,
-    node,
-    bal_tag_name,
-    bal_attr,
-    bal_date_attr,
-    bal_type_string,
-) -> None:
-    bal_tag = node.find(bal_tag_name)
-    if not bal_tag or not bal_tag.text:
-        return
+    node: ET.Element,
+    bal_tag_name: str,
+) -> t.Optional[t.Tuple[decimal.Decimal, datetime.datetime]]:
 
-    with has_node(bal_tag, "balamt") as balamt_tag:
-        try:
-            statement["balance"] = to_decimal(balamt_tag)
-        except (IndexError, decimal.InvalidOperation) as error:
-            raise ValueError(
-                "Empty %s balance " % bal_type_string
-            ) from error
+    balance = node.find(bal_tag_name)
+    if not balance or not balance.text:
+        return None
 
-    with has_node(bal_tag, "dtasof") as dtasof_tag:
-        if not dtasof_tag.text:
-            raise ValueError("Missing balance date")
-        statement["balance_date"] = from_ofx_date(dtasof_tag.text)
+    amount_str = extract_contents(balance, "BALAMT")
+    if amount_str is None:
+        raise ValueError("Missing BALAMT tag")
 
+    try:
+        amount = to_decimal(amount_str)
+    except (IndexError, decimal.InvalidOperation) as error:
+        raise ValueError("Empty balance") from error
 
-def _default_statement() -> tp.Statement:
-    return {
-        "start_date": datetime.datetime(1970, 12, 31),
-        "end_date": datetime.datetime(1970, 12, 31),
-        "currency": "USD",
-        "transactions": [],
-        "discarded_entries": [],
-        "warnings": [],
-        "balance": decimal.Decimal(0),
-        "balance_date": datetime.datetime(1970, 12, 31),
-        "available_balance": decimal.Decimal(0),
-        "available_balance_date": datetime.datetime(1970, 12, 31),
-    }
+    date_str = extract_contents(balance, "DTASOF")
+    if date_str is None:
+        raise ValueError("Missing DTASOF tag.")
+
+    date = from_ofx_date(date_str)
+
+    return amount, date
 
 
 def parse_statement(node: ET.Element) -> tp.Statement:
     """
     Parse a statement in ofx-land and return a Statement object.
     """
-    statement = _default_statement()
-    apply = apply_contents(statement)
-    apply(node, "dstart", from_ofx_date, alias="start_date")
-    apply(node, "dtend", from_ofx_date, alias="end_date")
-    apply(node, "curdef", from_ofx_date, alias="currency")
-    parse_balance(statement, node, "ledgerbal",
-                     "balance", "balance_date", "ledger")
-    parse_balance(statement, node, "availbal", "available_balance",
-                     "available_balance_date", "ledger")
+    rv = tp.defaults.statement()
+
+    start_date = extract_contents(node, "DTSTART")
+    if start_date is not None:
+        rv["start_date"] = from_ofx_date(start_date)
+
+    end_date = extract_contents(node, "DTEND")
+    if end_date is not None:
+        rv["end_date"] = from_ofx_date(end_date)
+
+    currency = extract_contents(node, "CURDEF")
+    if currency is not None:
+        rv["currency"] = currency
+
+    balance = parse_balance(node, "ledgerbal")
+    if balance is not None:
+        amount, date = balance
+        rv["balance"] = amount
+        rv["balance_date"] = date
+
+    balance = parse_balance(node, "availbal")
+    if balance is not None:
+        amount, date = balance
+        rv["available_balance"] = amount
+        rv["available_balance_date"] = date
 
     for tx_node in node.findall("stmttrn"):
-        statement["transactions"].append(
-            parse_transaction(tx_node))
+        rv["transactions"].append(parse_transaction(tx_node))
 
-    return statement
-
-
-def _default_transaction() -> tp.Transaction:
-    return {
-        "payee": "",
-        "type": "",
-        "date": datetime.datetime(1970, 12, 31),
-        "user_date": datetime.datetime(1970, 12, 31),
-        "amount": decimal.Decimal(0),
-        "id": "",
-        "memo": "",
-        "sic": None,
-        "mcc": "",
-        "checknum": "",
-    }
+    return rv
 
 
-def _amount_to_decimal(val: str) -> decimal.Decimal:
-
-    try:
-        return decimal.Decimal(val)
-    except decimal.InvalidOperation:
-        if val in {"null", "-null"}:
-            return decimal.Decimal(0)
-        else:
-            raise ValueError(
-                "Invalid Transaction Amount: '%s'"
-                "" % val
-            )
-
-
-def parse_transaction(node) -> tp.Transaction:
+def parse_transaction(node: ET.Element) -> tp.Transaction:
     """
     Parse a transaction in ofx-land and return a Transaction object.
     """
-    transaction = _default_transaction()
-    apply = apply_contents(transaction)
-    apply(node, "trntype", str.lower, alias="type")
-    apply(node, "name", alias="payee")
-    apply(node, "memo")
-    apply(node, "trnamt", _amount_to_decimal, alias="amount")
-    apply(node, "dtposted", from_ofx_date, alias="date")
-    apply(node, "dtuser", from_ofx_date, alias="user_date")
-    apply(node, "fitid", alias="id")
-    apply(node, "sic")
-    apply(node, "checknum")
+    rv = tp.defaults.transaction()
 
-    if transaction["sic"] is not None and transaction["sic"] in mcc.codes:
+    type_ = extract_contents(node, "TRNTYPE")
+    if type_ is not None:
+        rv["type"] = type_.lower()
+
+    payee = extract_contents(node, "NAME")
+    if payee is not None:
+        rv["payee"] = payee
+
+    memo = extract_contents(node, "MEMO")
+    if memo is not None:
+        rv["memo"] = memo
+
+    amount = extract_contents(node, "TRNAMT")
+    if amount is not None:
+        rv["amount"] = to_decimal(amount)
+
+    date_posted = extract_contents(node, "DTPOSTED")
+    if date_posted is not None:
+        rv["date"] = from_ofx_date(date_posted)
+
+    fitid = extract_contents(node, "ID")
+    if fitid is not None:
+        rv["id"] = fitid
+
+    sic = extract_contents(node, "SIC")
+    if sic is not None:
+        rv["sic"] = sic
+
+    checknum = extract_contents(node, "CHECKNUM")
+    if checknum is not None:
+        rv["checknum"] = checknum
+
+    if sic is not None and sic in mcc.codes:
         try:
-            transaction["mcc"] = mcc.codes[
-                transaction["sic"]]["combined description"]
+            rv["mcc"] = mcc.codes[sic]["combined description"]
         except IndexError:
             raise ValueError(
-                "Empty transaction Merchant Category Code (MCC)")
+                "Empty rv Merchant Category Code (MCC)")
 
-    return transaction
+    return rv
 
 
-def to_decimal(tag) -> decimal.Decimal:
-    d = tag.contents[0].strip()
-    # Handle 10,000.50 formatted numbers
-    if re.search(r".*\..*,", d):
-        d = d.replace(".", "")
-    # Handle 10.000,50 formatted numbers
-    if re.search(r".*,.*\.", d):
-        d = d.replace(",", "")
-    # Handle 10000,50 formatted numbers
-    if "." not in d and "," in d:
-        d = d.replace(",", ".")
-    # Handle 1 025,53 formatted numbers
-    d = d.replace(" ", "")
-    # Handle +1058,53 formatted numbers
-    d = d.replace("+", "")
-    return decimal.Decimal(d)
+def parse_ofx(ofx_str: str) -> tp.ParseResult:
+    rv = tp.defaults.parse_result()
+    headers = clean_headers(
+        decode_headers(extract_headers(ofx_str)))
+    cleaned = clean_ofx_xml(ofx_str)
+    node = ET.fromstring(cleaned)
+
+    try:
+        rv["signon"] = parse_signon_response(
+            next(node.iter("SONRS")))
+    except StopIteration as error:
+        raise ValueError("Missing SONRS tag.") from error
+
+    try:
+        status_node = next(node.iter("STATUS"))
+    except StopIteration as error:
+        raise ValueError("Missing STATUS tag.") from error
+    else:
+        rv["status"] = parse_status(status_node)
+
+    for child_node in node.iter("ACCTINFO"):
+        account_ = parse_account(child_node)
+        rv["accounts"].append(account_)
+
+    for child_node in node.iter("STMTTRN"):
+        transaction = parse_transaction(child_node)
+        rv["transactions"].append(transaction)
+
+    return rv

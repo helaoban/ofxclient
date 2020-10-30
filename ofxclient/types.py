@@ -8,10 +8,14 @@ import typing as t
 import typing_extensions as te
 
 
-class Signon(te.TypedDict):
-    code: t.Optional[str]
+class Status(te.TypedDict):
+    code: t.Optional[int]
     severity: t.Optional[str]
     message: t.Optional[str]
+
+
+class Signon(te.TypedDict):
+    status: t.Optional[Status]
     dtserver: t.Optional[str]
     language: t.Optional[str]
     dtprofup: t.Optional[str]
@@ -52,7 +56,6 @@ class Transaction(te.TypedDict):
     payee: str
     type: str
     date: t.Optional[datetime.datetime]
-    user_date: t.Optional[datetime.datetime]
     amount: t.Optional[decimal.Decimal]
     id: str
     memo: str
@@ -124,5 +127,135 @@ class ParseResult(te.TypedDict):
     accounts: t.List[Account]
     transactions: t.List[Transaction]
     securities: t.List[Security]
-    status: t.Optional[t.Dict[str, t.Any]]
+    status: t.Optional[Status]
     signon: t.Optional[Signon]
+
+
+class defaults:
+
+    @staticmethod
+    def parse_result() -> ParseResult:
+        return {
+            "accounts": [],
+            "transactions": [],
+            "securities": [],
+            "status": None,
+            "signon": None,
+        }
+
+    @staticmethod
+    def transaction() -> Transaction:
+        return {
+            "payee": "",
+            "type": "",
+            "date": datetime.datetime(1970, 12, 31),
+            "amount": decimal.Decimal(0),
+            "id": "",
+            "memo": "",
+            "sic": None,
+            "mcc": "",
+            "checknum": "",
+        }
+
+    @staticmethod
+    def statement() -> Statement:
+        return {
+            "start_date": datetime.datetime(1970, 12, 31),
+            "end_date": datetime.datetime(1970, 12, 31),
+            "currency": "USD",
+            "transactions": [],
+            "discarded_entries": [],
+            "warnings": [],
+            "balance": decimal.Decimal(0),
+            "balance_date": datetime.datetime(1970, 12, 31),
+            "available_balance": decimal.Decimal(0),
+            "available_balance_date": datetime.datetime(1970, 12, 31),
+        }
+
+
+    @staticmethod
+    def status() -> Status:
+        return {
+            "code": None,
+            "severity": None,
+            "message": None,
+        }
+
+    @staticmethod
+    def signon() -> Signon:
+        return {
+            "status": t.Optional[Status],
+            "dtserver": None,
+            "language": None,
+            "dtprofup": None,
+            "org": None,
+            "fid": None,
+            "intu_bid": None,
+        }
+
+    @staticmethod
+    def institution():
+        return {"organization": str, "fid": str}
+
+    @staticmethod
+    def investment_statement() -> InvestmentStatement:
+        return {
+            "start_date": datetime.datetime(1970, 12, 31),
+            "end_date": datetime.datetime(1970, 12, 31),
+            "currency": "USD",
+            "transactions": [],
+            "discarded_entries": [],
+            "warnings": [],
+            "balances": [],
+            "positions": [],
+            "available_cash": decimal.Decimal(0),
+            "margin_balance": decimal.Decimal(0),
+            "short_balance": decimal.Decimal(0),
+            "buying_power": decimal.Decimal(0),
+        }
+
+
+    @staticmethod
+    def investment_transaction() -> InvestmentTransaction:
+        pass
+
+    @staticmethod
+    def brokerage_balance() -> BrokerageBalance:
+        return {
+            "name": "",
+            "description": "",
+            "value": decimal.Decimal(0),
+        }
+
+    @staticmethod
+    def position() -> Position:
+        return {
+            "security": "N/A",
+            "units": decimal.Decimal(0),
+            "unit_price": decimal.Decimal(0),
+            "market_value": decimal.Decimal(0),
+            "date": datetime.datetime(1970, 12, 31)
+        }
+
+    @staticmethod
+    def security() -> Security:
+        return {
+            "unique_id": "",
+            "name": "",
+            "ticker": "",
+            "memo": "",
+        }
+
+
+    @staticmethod
+    def account() -> Account:
+        return {
+            "account_id": "",
+            "routing_number": "",
+            "account_type": "",
+            "description": "",
+            "branch_id": None,
+            "broker_id": None,
+        }
+
+

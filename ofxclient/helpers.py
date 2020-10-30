@@ -3,6 +3,8 @@ import re
 import typing as t
 import uuid
 import xml.etree.ElementTree as ET
+import decimal
+
 
 OFX_DATE_FORMAT = "%Y%m%d%H%M%S"
 
@@ -77,3 +79,27 @@ def from_ofx_date(
             return dt.datetime.strptime(
                 date_str[:8], format) - tz_offset + msec
 
+
+def to_decimal(d: str) -> decimal.Decimal:
+    # Handle 10,000.50 formatted numbers
+    if re.search(r".*\..*,", d):
+        d = d.replace(".", "")
+    # Handle 10.000,50 formatted numbers
+    if re.search(r".*,.*\.", d):
+        d = d.replace(",", "")
+    # Handle 10000,50 formatted numbers
+    if "." not in d and "," in d:
+        d = d.replace(",", ".")
+    # Handle 1 025,53 formatted numbers
+    d = d.replace(" ", "")
+    # Handle +1058,53 formatted numbers
+    d = d.replace("+", "")
+    # Handle null, -null
+    d = d.replace("null|-null", "0")
+    try:
+        return decimal.Decimal(d)
+    except decimal.InvalidOperation as error :
+        raise ValueError(
+            "Invalid Transaction Amount: '%s'"
+            "" % d
+        ) from error
