@@ -24,13 +24,6 @@ class Signon(te.TypedDict):
     intu_bid: t.Optional[str]
 
 
-class AccountType(enum.Enum):
-    Unknown = 0
-    Bank = 1
-    CreditCard = 2
-    Investment = 3
-
-
 class BrokerageBalance(te.TypedDict):
     name: str
     description: str
