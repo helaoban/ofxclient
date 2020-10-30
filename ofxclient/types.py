@@ -52,9 +52,6 @@ class Transaction(te.TypedDict):
     amount: t.Optional[decimal.Decimal]
     id: str
     memo: str
-    sic: t.Optional[str]
-    mcc: str
-    checknum: str
 
 
 class InvestmentTransaction(te.TypedDict):
@@ -145,9 +142,6 @@ class defaults:
             "amount": decimal.Decimal(0),
             "id": "",
             "memo": "",
-            "sic": None,
-            "mcc": "",
-            "checknum": "",
         }
 
     @staticmethod

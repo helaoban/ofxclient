@@ -10,7 +10,7 @@ import typing as t
 import xml.etree.ElementTree as ET
 from itertools import chain
 
-from . import mcc, types as tp
+from . import types as tp
 from .helpers import from_ofx_date, to_decimal
 
 
@@ -311,21 +311,6 @@ def parse_transaction(node: ET.Element) -> tp.Transaction:
     fitid = extract_contents(node, "ID")
     if fitid is not None:
         rv["id"] = fitid
-
-    sic = extract_contents(node, "SIC")
-    if sic is not None:
-        rv["sic"] = sic
-
-    checknum = extract_contents(node, "CHECKNUM")
-    if checknum is not None:
-        rv["checknum"] = checknum
-
-    if sic is not None and sic in mcc.codes:
-        try:
-            rv["mcc"] = mcc.codes[sic]["combined description"]
-        except IndexError:
-            raise ValueError(
-                "Empty rv Merchant Category Code (MCC)")
 
     return rv
 
