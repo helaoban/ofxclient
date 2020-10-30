@@ -1,11 +1,7 @@
-import codecs
 from collections import OrderedDict
-from collections.abc import Iterable
-import contextlib
 import decimal
 import datetime
 import re
-import sys
 import typing as t
 import xml.etree.ElementTree as ET
 from itertools import chain

@@ -1,6 +1,4 @@
 import argparse
-import getpass
-import io
 import logging
 import os
 import os.path
@@ -15,6 +13,7 @@ from .parse import parse_ofx
 
 AUTO_OPEN_DOWNLOADS = 1
 DOWNLOAD_DAYS = 30
+
 
 def environ_or_required(key):
     return (
